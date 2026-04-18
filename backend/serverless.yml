@@ -1,0 +1,114 @@
+service: system-pulse
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ap-southeast-1
+  stage: ${opt:stage, 'dev'} # Standard senior practice: default to 'dev'
+  environment:
+    # single-table design: both logical tables use the same physical table
+    TABLE_NAME: SystemPulseTable-${self:provider.stage}
+    SYSTEM_PULSE_TABLE: ${self:provider.environment.TABLE_NAME}
+    USERS_TABLE: ${self:provider.environment.TABLE_NAME}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:Query
+          Resource:
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:provider.environment.SYSTEM_PULSE_TABLE}
+            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:provider.environment.USERS_TABLE}
+
+functions:
+  # User Invitation
+  createUserInvitation:
+    handler: src/handler.createUserInvitation # Points to your 'lobby' mapper
+    events:
+      - http:
+          path: /users/invite
+          method: post
+          cors: true
+  acceptUserInvitation:
+    handler: src/handler.acceptUserInvitation
+    events:
+      - http:
+          path: /users/invite/accept
+          method: post
+          cors: true
+  assignSystemAccess:
+    handler: src/handler.assignSystemAccess
+    events:
+      - http:
+          path: /users/{id}/systems
+          method: post
+          cors: true
+  createHealthCheck:
+    handler: src/handler.createHealthCheck
+    events:
+      - http:
+          path: /systems
+          method: post
+          cors: true
+  triggerHealthCheck:
+    handler: src/handler.triggerHealthCheck
+    events:
+      - http:
+          path: /systems/{id}/trigger
+          method: post
+          cors: true
+
+resources:
+  Resources:
+    SystemPulseSingleTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.TABLE_NAME}
+        AttributeDefinitions:
+          - AttributeName: PK
+            AttributeType: S
+          - AttributeName: SK
+            AttributeType: S
+          - AttributeName: entityType
+            AttributeType: S
+          - AttributeName: inviteToken
+            AttributeType: S
+        KeySchema:
+          - AttributeName: PK
+            KeyType: HASH
+          - AttributeName: SK
+            KeyType: RANGE
+        BillingMode: PAY_PER_REQUEST
+        GlobalSecondaryIndexes:
+          - IndexName: EntityTypeIndex
+            KeySchema:
+              - AttributeName: entityType
+                KeyType: HASH
+              - AttributeName: SK
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+          - IndexName: InviteTokenIndex
+            KeySchema:
+              - AttributeName: inviteToken
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+# --- LOCAL TESTING SECTION ---
+plugins:
+  - serverless-plugin-typescript # THIS MUST BE FIRST
+  - serverless-dynamodb
+  - serverless-offline # THIS MUST BE LAST
+
+custom:
+  dynamodb:
+    stages:
+      - dev
+    start:
+      port: 8000
+      inMemory: true
+      migrate: true # Automatically creates local tables for you
