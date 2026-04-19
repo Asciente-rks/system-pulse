@@ -1,15 +1,31 @@
 service: system-pulse
+frameworkVersion: "3"
 
 provider:
   name: aws
   runtime: nodejs20.x
-  region: ap-southeast-1
-  stage: ${opt:stage, 'dev'} # Standard senior practice: default to 'dev'
+  region: ${opt:region, 'ap-southeast-1'}
+  stage: ${opt:stage, 'dev'}
+  timeout: 28
+  memorySize: 256
+  logRetentionInDays: 3
+  deploymentBucket:
+    blockPublicAccess: true
   environment:
-    # single-table design: both logical tables use the same physical table
-    TABLE_NAME: SystemPulseTable-${self:provider.stage}
+    TABLE_NAME: ${self:service}-${sls:stage}-table
     SYSTEM_PULSE_TABLE: ${self:provider.environment.TABLE_NAME}
     USERS_TABLE: ${self:provider.environment.TABLE_NAME}
+    HEALTH_CHECK_QUEUE_URL: !Ref HealthCheckQueue
+    HEALTH_STATUS_TOPIC_ARN: !Ref HealthStatusTopic
+    HEALTH_LOGS_BUCKET: !Ref HealthLogsBucket
+    RENDER_WAKEUP_DELAY_SECONDS: ${env:RENDER_WAKEUP_DELAY_SECONDS, '90'}
+    FRONTEND_URL: ${env:FRONTEND_URL, ''}
+    EMAIL_USER: ${env:EMAIL_USER, ''}
+    EMAIL_PASS: ${env:EMAIL_PASS, ''}
+    SHOW_INVITE_LINK: ${env:SHOW_INVITE_LINK, 'false'}
+    ENABLE_HEALTH_LOGS: ${env:ENABLE_HEALTH_LOGS, 'true'}
+    ENABLE_SNS_NOTIFICATIONS: ${env:ENABLE_SNS_NOTIFICATIONS, 'false'}
+    ENABLE_S3_ARCHIVE: ${env:ENABLE_S3_ARCHIVE, 'false'}
   iam:
     role:
       statements:
@@ -20,18 +36,38 @@ provider:
             - dynamodb:UpdateItem
             - dynamodb:Query
           Resource:
-            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:provider.environment.SYSTEM_PULSE_TABLE}
-            - arn:aws:dynamodb:${aws:region}:${aws:accountId}:table/${self:provider.environment.USERS_TABLE}
+            - !GetAtt SystemPulseSingleTable.Arn
+            - !Sub "${SystemPulseSingleTable.Arn}/index/*"
+        - Effect: Allow
+          Action:
+            - sqs:SendMessage
+            - sqs:ReceiveMessage
+            - sqs:DeleteMessage
+            - sqs:GetQueueAttributes
+            - sqs:ChangeMessageVisibility
+          Resource:
+            - !GetAtt HealthCheckQueue.Arn
+            - !GetAtt HealthCheckDlq.Arn
+        - Effect: Allow
+          Action:
+            - sns:Publish
+          Resource:
+            - !Ref HealthStatusTopic
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+          Resource:
+            - !Sub "${HealthLogsBucket.Arn}/*"
 
 functions:
-  # User Invitation
   createUserInvitation:
-    handler: src/handler.createUserInvitation # Points to your 'lobby' mapper
+    handler: src/handler.createUserInvitation
     events:
       - http:
           path: /users/invite
           method: post
           cors: true
+
   acceptUserInvitation:
     handler: src/handler.acceptUserInvitation
     events:
@@ -39,6 +75,7 @@ functions:
           path: /users/invite/accept
           method: post
           cors: true
+
   assignSystemAccess:
     handler: src/handler.assignSystemAccess
     events:
@@ -46,6 +83,7 @@ functions:
           path: /users/{id}/systems
           method: post
           cors: true
+
   createHealthCheck:
     handler: src/handler.createHealthCheck
     events:
@@ -53,6 +91,7 @@ functions:
           path: /systems
           method: post
           cors: true
+
   triggerHealthCheck:
     handler: src/handler.triggerHealthCheck
     events:
@@ -61,18 +100,41 @@ functions:
           method: post
           cors: true
 
+  getSystemLogs:
+    handler: src/handler.getSystemLogs
+    events:
+      - http:
+          path: /systems/{id}/logs
+          method: get
+          cors: true
+
+  processHealthCheckQueue:
+    handler: src/handler.processHealthCheckQueue
+    timeout: 60
+    events:
+      - sqs:
+          arn: !GetAtt HealthCheckQueue.Arn
+          batchSize: 5
+          functionResponseType: ReportBatchItemFailures
+
 resources:
   Resources:
     SystemPulseSingleTable:
       Type: AWS::DynamoDB::Table
       Properties:
         TableName: ${self:provider.environment.TABLE_NAME}
+        BillingMode: PROVISIONED
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
         AttributeDefinitions:
           - AttributeName: PK
             AttributeType: S
           - AttributeName: SK
             AttributeType: S
           - AttributeName: entityType
+            AttributeType: S
+          - AttributeName: status_
             AttributeType: S
           - AttributeName: inviteToken
             AttributeType: S
@@ -81,34 +143,75 @@ resources:
             KeyType: HASH
           - AttributeName: SK
             KeyType: RANGE
-        BillingMode: PAY_PER_REQUEST
         GlobalSecondaryIndexes:
           - IndexName: EntityTypeIndex
             KeySchema:
               - AttributeName: entityType
                 KeyType: HASH
-              - AttributeName: SK
+              - AttributeName: status_
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
           - IndexName: InviteTokenIndex
             KeySchema:
               - AttributeName: inviteToken
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
 
-# --- LOCAL TESTING SECTION ---
+    HealthCheckDlq:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${sls:stage}-health-check-dlq
+
+    HealthCheckQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-${sls:stage}-health-check-queue
+        VisibilityTimeout: 180
+        RedrivePolicy:
+          deadLetterTargetArn: !GetAtt HealthCheckDlq.Arn
+          maxReceiveCount: 3
+
+    HealthStatusTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-${sls:stage}-health-status
+
+    HealthLogsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:service}-${sls:stage}-health-logs-${aws:accountId}-${aws:region}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        BucketEncryption:
+          ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        LifecycleConfiguration:
+          Rules:
+            - Id: ExpireOldHealthLogs
+              Status: Enabled
+              ExpirationInDays: 30
+
+  Outputs:
+    SystemPulseTableName:
+      Value: ${self:provider.environment.TABLE_NAME}
+    HealthCheckQueueUrl:
+      Value: !Ref HealthCheckQueue
+    HealthStatusTopicArn:
+      Value: !Ref HealthStatusTopic
+    HealthLogsBucketName:
+      Value: !Ref HealthLogsBucket
+
 plugins:
-  - serverless-plugin-typescript # THIS MUST BE FIRST
-  - serverless-dynamodb
-  - serverless-offline # THIS MUST BE LAST
-
-custom:
-  dynamodb:
-    stages:
-      - dev
-    start:
-      port: 8000
-      inMemory: true
-      migrate: true # Automatically creates local tables for you
+  - serverless-plugin-typescript

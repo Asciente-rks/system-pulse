@@ -5,6 +5,7 @@ import { createHealthSchema } from "../../validation/health-schema.js";
 import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import type { CreateHealthInput } from "../../types/health.js";
+import { isAdminOrSuper } from "../../utils/rbac.js";
 
 export const createHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -24,6 +25,24 @@ export const createHealthCheck = async (
     }
 
     const body = parse(event.body) as Record<string, unknown>;
+
+    const inviterRole =
+      (event.headers &&
+        ((event.headers["x-inviter-role"] as string) ||
+          (event.headers["X-Inviter-Role"] as string))) ||
+      undefined;
+
+    if (!isAdminOrSuper(inviterRole as any)) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          status: 403,
+          message: "forbidden - only admin or superadmin can add systems",
+        }),
+      };
+    }
+
     const validated = (await createHealthSchema.validate(body, {
       stripUnknown: true,
     })) as CreateHealthInput;

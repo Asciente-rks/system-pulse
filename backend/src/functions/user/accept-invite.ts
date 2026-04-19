@@ -80,7 +80,7 @@ export const acceptUserInvitation = async (
         Key: { PK: user.PK, SK: user.SK },
         UpdateExpression:
           "SET passwordHash = :ph, #s = :active REMOVE inviteToken, tokenExpiry",
-        ExpressionAttributeNames: { "#s": "status" },
+        ExpressionAttributeNames: { "#s": "status_" },
         ExpressionAttributeValues: { ":ph": passwordHash, ":active": "Active" },
       }),
     );

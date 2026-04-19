@@ -4,6 +4,7 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { docClient } from "../../config/db.js";
 import { UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { isAdminOrSuper } from "../../utils/rbac.js";
+import { USER_STATUSES } from "../../types/user.js";
 
 export const assignSystemAccess = async (
   event: APIGatewayProxyEvent,
@@ -18,7 +19,9 @@ export const assignSystemAccess = async (
       };
 
     const inviterRole =
-      (event.headers && (event.headers["x-inviter-role"] as string)) ||
+      (event.headers &&
+        ((event.headers["x-inviter-role"] as string) ||
+          (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
     if (!isAdminOrSuper(inviterRole as any)) {
       return {
@@ -33,6 +36,8 @@ export const assignSystemAccess = async (
       (event.pathParameters && event.pathParameters.id) ||
       (body && (body.userId as string));
     const systemIds = (body && (body.systemIds as string[])) || [];
+    const requestedStatus =
+      (body && (body.status_ as string | undefined)) || undefined;
 
     if (!userId || !Array.isArray(systemIds)) {
       return {
@@ -42,19 +47,55 @@ export const assignSystemAccess = async (
       };
     }
 
+    if (
+      requestedStatus &&
+      !USER_STATUSES.includes(requestedStatus as (typeof USER_STATUSES)[number])
+    ) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({
+          message: `status_ must be one of: ${USER_STATUSES.join(", ")}`,
+        }),
+      };
+    }
+
+    const updateExpressionParts = ["allowedSystemIds = :systems"];
+    const expressionAttributeValues: Record<string, unknown> = {
+      ":systems": systemIds,
+    };
+    const expressionAttributeNames: Record<string, string> = {};
+
+    if (requestedStatus) {
+      updateExpressionParts.push("#status = :status");
+      expressionAttributeNames["#status"] = "status_";
+      expressionAttributeValues[":status"] = requestedStatus;
+    }
+
     await docClient.send(
       new UpdateCommand({
         TableName: tableName,
         Key: { PK: "USER", SK: `USER#${userId}` },
-        UpdateExpression: "SET allowedSystemIds = :s",
-        ExpressionAttributeValues: { ":s": systemIds },
+        UpdateExpression: `SET ${updateExpressionParts.join(", ")}`,
+        ExpressionAttributeValues: expressionAttributeValues,
+        ...(Object.keys(expressionAttributeNames).length > 0
+          ? { ExpressionAttributeNames: expressionAttributeNames }
+          : {}),
       }),
     );
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ status: 200, message: "assigned" }),
+      body: JSON.stringify({
+        status: 200,
+        message: "User access updated",
+        data: {
+          userId,
+          systemIds,
+          status_: requestedStatus,
+        },
+      }),
     };
   } catch (error) {
     console.error("assign-system-access error:", error);

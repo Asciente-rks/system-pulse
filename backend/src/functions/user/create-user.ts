@@ -4,8 +4,9 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { createUserSchema } from "../../validation/user-validation.js"; // You'll need this!
 import { docClient } from "../../config/db.js"; // Use the shared connection
 import { createUserService } from "../../services/user-service.js";
-import { canInviteRole } from "../../utils/rbac.js";
+import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
 import type { CreateUserInput } from "../../types/user.js";
+import { sendInviteEmail } from "../../services/email-service.js";
 
 export const createUserInvitation = async (
   event: APIGatewayProxyEvent,
@@ -33,7 +34,9 @@ export const createUserInvitation = async (
 
     // 3. Authorization check
     const inviterRole =
-      (event.headers && (event.headers["x-inviter-role"] as string)) ||
+      (event.headers &&
+        ((event.headers["x-inviter-role"] as string) ||
+          (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
     if (!canInviteRole(inviterRole as any, validated.role)) {
       return {
@@ -46,14 +49,46 @@ export const createUserInvitation = async (
       };
     }
 
+    // If the client attempted to explicitly set `status_`, only admin/superadmin may do that
+    const attemptedSetStatus = Object.prototype.hasOwnProperty.call(
+      body,
+      "status_",
+    );
+    if (attemptedSetStatus && !isAdminOrSuper(inviterRole as any)) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          status: 403,
+          message: "forbidden - only admin or superadmin can set status",
+        }),
+      };
+    }
+
     // 4. Service Logic
     const service = createUserService(docClient, tableName);
     const { user, inviteToken } = await service.createUserInvitation(validated);
 
-    // send invite link (local stub)
-    const frontend = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontend = process.env.FRONTEND_URL;
+    if (!frontend) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({
+          status: 500,
+          message: "FRONTEND_URL environment variable is not set.",
+        }),
+      };
+    }
+
     const inviteLink = `${frontend}/accept-invite?token=${inviteToken}`;
-    console.log("Invite link:", inviteLink);
+
+    await sendInviteEmail({
+      to: user.email,
+      inviteLink,
+      invitedName: user.full_name,
+      invitedRole: user.role,
+    });
 
     // 4. Standardized Response
     return {
@@ -61,9 +96,8 @@ export const createUserInvitation = async (
       headers,
       body: JSON.stringify({
         status: 201,
-        message: "User invited successfully",
+        message: "User invited successfully and email sent",
         data: user,
-        // debug: invite link logged to console in local/dev
         inviteLink:
           process.env.SHOW_INVITE_LINK === "true" ? inviteLink : undefined,
       }),

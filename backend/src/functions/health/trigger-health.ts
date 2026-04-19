@@ -1,9 +1,11 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { handleError, headers } from "../../utils/error-handler.js";
-import { docClient } from "../../config/db.js";
 import { GetCommand } from "@aws-sdk/lib-dynamodb";
-import { createHealthService } from "../../services/health-service.js";
+import { docClient } from "../../config/db.js";
+import { enqueueHealthCheck } from "../../services/queue-service.js";
+import { handleError, headers } from "../../utils/error-handler.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
+import type { HealthCheckQueueMessage } from "../../types/health-events.js";
+import { parse } from "../../utils/parse.js";
 
 export const triggerHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -17,9 +19,21 @@ export const triggerHealthCheck = async (
         body: JSON.stringify({ message: "SYSTEM_PULSE_TABLE not set" }),
       };
 
+    const queueUrl = process.env.HEALTH_CHECK_QUEUE_URL;
+    if (!queueUrl) {
+      return {
+        statusCode: 500,
+        headers,
+        body: JSON.stringify({ message: "HEALTH_CHECK_QUEUE_URL not set" }),
+      };
+    }
+
+    const body = parse(event.body);
+
     const systemId =
       (event.pathParameters && event.pathParameters.id) ||
-      (event.body && JSON.parse(event.body).systemId);
+      (body && (body.systemId as string));
+
     if (!systemId)
       return {
         statusCode: 400,
@@ -28,10 +42,16 @@ export const triggerHealthCheck = async (
       };
 
     const inviterRole =
-      (event.headers && (event.headers["x-inviter-role"] as string)) ||
+      (event.headers &&
+        ((event.headers["x-inviter-role"] as string) ||
+          (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
+
     const userId =
-      (event.headers && (event.headers["x-user-id"] as string)) || undefined;
+      (event.headers &&
+        ((event.headers["x-user-id"] as string) ||
+          (event.headers["X-User-Id"] as string))) ||
+      undefined;
 
     if (!isAdminOrSuper(inviterRole as any)) {
       if (!userId)
@@ -46,8 +66,17 @@ export const triggerHealthCheck = async (
           Key: { PK: "USER", SK: `USER#${userId}` },
         }),
       );
+
       const user = userRes.Item || {};
       const allowed: string[] = user.allowedSystemIds || [];
+      if (user.status_ !== "Active") {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ message: "forbidden - user is not active" }),
+        };
+      }
+
       if (!allowed.includes(systemId))
         return {
           statusCode: 403,
@@ -70,13 +99,29 @@ export const triggerHealthCheck = async (
         body: JSON.stringify({ message: "system not found" }),
       };
 
-    const healthSvc = createHealthService(docClient, tableName);
-    const probe = await healthSvc.runHealthCheck(systemId, system.url);
+    const queuedMessage: HealthCheckQueueMessage = {
+      systemId,
+      attempt: 1,
+      requestedBy: userId,
+      requestedAt: new Date().toISOString(),
+    };
+
+    await enqueueHealthCheck(queuedMessage, 0);
 
     return {
-      statusCode: 200,
+      statusCode: 202,
       headers,
-      body: JSON.stringify({ status: 200, data: probe }),
+      body: JSON.stringify({
+        status: 202,
+        message: "Health check queued. Automatic wake-up recheck is enabled.",
+        data: {
+          systemId,
+          attempt: 1,
+          delayedRecheckSeconds: Number(
+            process.env.RENDER_WAKEUP_DELAY_SECONDS || 90,
+          ),
+        },
+      }),
     };
   } catch (error) {
     console.error("trigger-health error:", error);

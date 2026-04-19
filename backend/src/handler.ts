@@ -3,3 +3,5 @@ export { createHealthCheck } from "./functions/health/check-health.js";
 export { acceptUserInvitation } from "./functions/user/accept-invite.js";
 export { assignSystemAccess } from "./functions/user/assign-system-access.js";
 export { triggerHealthCheck } from "./functions/health/trigger-health.js";
+export { processHealthCheckQueue } from "./functions/health/process-health-queue.js";
+export { getSystemLogs } from "./functions/health/get-system-logs.js";
