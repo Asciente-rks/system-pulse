@@ -23,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     env:
       SERVICE_NAME: system-pulse
       STAGE: ${{ github.event.inputs.stage || 'dev' }}
@@ -48,11 +49,41 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
-      - name: Configure AWS credentials
+      - name: Validate AWS auth inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          has_keys="false"
+          has_role="false"
+
+          if [ -n "${{ secrets.AWS_ACCESS_KEY_ID }}" ] && [ -n "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            has_keys="true"
+          fi
+
+          if [ -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" ]; then
+            has_role="true"
+          fi
+
+          if [ "${has_keys}" != "true" ] && [ "${has_role}" != "true" ]; then
+            echo "Missing AWS authentication for GitHub Actions."
+            echo "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY secrets, or set AWS_ROLE_TO_ASSUME for OIDC."
+            exit 1
+          fi
+
+      - name: Configure AWS credentials (access key)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (OIDC role)
+        if: ${{ (secrets.AWS_ACCESS_KEY_ID == '' || secrets.AWS_SECRET_ACCESS_KEY == '') && secrets.AWS_ROLE_TO_ASSUME != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Install and build backend
