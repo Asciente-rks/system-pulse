@@ -18,7 +18,14 @@ dist/
 Thumbs.db
 
 scripts/
+!backend/scripts/
+!backend/scripts/**
+
 assets/
+!frontend/assets/
+!frontend/assets/**
 
 src/scripts/
+!backend/src/scripts/
+!backend/src/scripts/**
 
