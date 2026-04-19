@@ -374,24 +374,37 @@ jobs:
           deploy_function "${API_FUNCTION_NAME}" "dist/router-handler.api" 28 256
           deploy_function "${WORKER_FUNCTION_NAME}" "dist/handler.processHealthCheckQueue" 60 256
 
-          cat > /tmp/function-url-cors.json <<'JSON'
+          cat > /tmp/function-url-create.json <<JSON
           {
-            "AllowOrigins": ["*"],
-            "AllowMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "AllowHeaders": ["Content-Type", "Authorization", "x-user-id", "x-inviter-role"],
-            "MaxAge": 86400
+            "FunctionName": "${API_FUNCTION_NAME}",
+            "AuthType": "NONE",
+            "Cors": {
+              "AllowOrigins": ["*"],
+              "AllowMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+              "AllowHeaders": ["Content-Type", "Authorization", "x-user-id", "x-inviter-role"],
+              "MaxAge": 86400
+            }
+          }
+          JSON
+
+          cat > /tmp/function-url-update.json <<JSON
+          {
+            "FunctionName": "${API_FUNCTION_NAME}",
+            "Cors": {
+              "AllowOrigins": ["*"],
+              "AllowMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+              "AllowHeaders": ["Content-Type", "Authorization", "x-user-id", "x-inviter-role"],
+              "MaxAge": 86400
+            }
           }
           JSON
 
           if ! aws lambda get-function-url-config --function-name "${API_FUNCTION_NAME}" >/dev/null 2>&1; then
             aws lambda create-function-url-config \
-              --function-name "${API_FUNCTION_NAME}" \
-              --auth-type NONE \
-              --cors file:///tmp/function-url-cors.json >/dev/null
+              --cli-input-json file:///tmp/function-url-create.json >/dev/null
           else
             aws lambda update-function-url-config \
-              --function-name "${API_FUNCTION_NAME}" \
-              --cors file:///tmp/function-url-cors.json >/dev/null
+              --cli-input-json file:///tmp/function-url-update.json >/dev/null
           fi
 
           aws lambda add-permission \
