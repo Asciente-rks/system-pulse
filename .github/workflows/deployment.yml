@@ -384,12 +384,27 @@ jobs:
               --auth-type NONE >/dev/null
           fi
 
+          aws lambda remove-permission \
+            --function-name "${API_FUNCTION_NAME}" \
+            --statement-id "function-url-public" >/dev/null 2>&1 || true
+
           aws lambda add-permission \
             --function-name "${API_FUNCTION_NAME}" \
             --statement-id "function-url-public" \
             --action lambda:InvokeFunctionUrl \
             --principal "*" \
-            --function-url-auth-type NONE >/dev/null 2>&1 || true
+            --function-url-auth-type NONE >/dev/null
+
+          aws lambda remove-permission \
+            --function-name "${API_FUNCTION_NAME}" \
+            --statement-id "function-url-public-invoke" >/dev/null 2>&1 || true
+
+          aws lambda add-permission \
+            --function-name "${API_FUNCTION_NAME}" \
+            --statement-id "function-url-public-invoke" \
+            --action lambda:InvokeFunction \
+            --principal "*" \
+            --invoked-via-function-url >/dev/null
 
           MAPPING_UUID=$(aws lambda list-event-source-mappings \
             --function-name "${WORKER_FUNCTION_NAME}" \

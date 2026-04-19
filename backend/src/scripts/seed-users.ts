@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
@@ -12,6 +13,21 @@ async function seed() {
   if (!tableName) {
     console.error(
       "Provide table name as arg or set USERS_TABLE/TABLE_NAME/SYSTEM_PULSE_TABLE",
+    );
+    process.exit(1);
+  }
+
+  const region = process.env.AWS_REGION || "ap-southeast-1";
+  const ddbClient = new DynamoDBClient({ region });
+
+  try {
+    await ddbClient.send(new DescribeTableCommand({ TableName: tableName }));
+  } catch (err) {
+    console.error(
+      `DynamoDB table '${tableName}' was not found in region '${region}'.`,
+    );
+    console.error(
+      "Run the deployment workflow to provision infra, then rerun seeding.",
     );
     process.exit(1);
   }

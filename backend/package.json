@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "package": "npm run build && npm prune --omit=dev",
     "test": "echo \"No automated tests configured\"",
-    "seed": "npm run build && node dist/scripts/seed-users.js"
+    "seed": "npm run build && node dist/scripts/seed-users.js",
+    "seed:dev": "npm run seed -- system-pulse-dev-table"
   },
   "keywords": [],
   "author": "",
