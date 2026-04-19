@@ -29,7 +29,7 @@ jobs:
       SERVICE_NAME: system-pulse
       STAGE: ${{ github.event.inputs.stage || 'dev' }}
       AWS_REGION: ${{ github.event.inputs.region || 'ap-southeast-1' }}
-      LAMBDA_KMS_KEY_ARN: ${{ vars.LAMBDA_KMS_KEY_ARN || 'alias/aws/lambda' }}
+      LAMBDA_KMS_KEY_ARN: ${{ vars.LAMBDA_KMS_KEY_ARN || '' }}
       FRONTEND_URL: ${{ vars.FRONTEND_URL }}
       EMAIL_USER: ${{ secrets.EMAIL_USER }}
       EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -327,6 +327,11 @@ jobs:
             local TIMEOUT="$3"
             local MEMORY="$4"
             local CREATED="false"
+            local KMS_ARGS=()
+
+            if [ -n "${LAMBDA_KMS_KEY_ARN:-}" ]; then
+              KMS_ARGS=(--kms-key-arn "${LAMBDA_KMS_KEY_ARN}")
+            fi
 
             if aws lambda get-function --function-name "${FUNCTION_NAME}" >/dev/null 2>&1; then
               aws lambda update-function-code \
@@ -342,7 +347,7 @@ jobs:
                 --handler "${HANDLER}" \
                 --timeout "${TIMEOUT}" \
                 --memory-size "${MEMORY}" \
-                --kms-key-arn "${LAMBDA_KMS_KEY_ARN}" \
+                "${KMS_ARGS[@]}" \
                 --environment file:///tmp/lambda-environment.json >/dev/null
             else
               aws lambda create-function \
@@ -352,7 +357,7 @@ jobs:
                 --handler "${HANDLER}" \
                 --timeout "${TIMEOUT}" \
                 --memory-size "${MEMORY}" \
-                --kms-key-arn "${LAMBDA_KMS_KEY_ARN}" \
+                "${KMS_ARGS[@]}" \
                 --zip-file fileb://backend.zip \
                 --environment file:///tmp/lambda-environment.json >/dev/null
 
