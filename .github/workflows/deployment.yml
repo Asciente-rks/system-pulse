@@ -50,6 +50,7 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Validate AWS auth inputs
+        id: aws-auth
         shell: bash
         run: |
           set -euo pipefail
@@ -71,8 +72,11 @@ jobs:
             exit 1
           fi
 
+          echo "has_keys=${has_keys}" >> "$GITHUB_OUTPUT"
+          echo "has_role=${has_role}" >> "$GITHUB_OUTPUT"
+
       - name: Configure AWS credentials (access key)
-        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
+        if: ${{ steps.aws-auth.outputs.has_keys == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -80,7 +84,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Configure AWS credentials (OIDC role)
-        if: ${{ (secrets.AWS_ACCESS_KEY_ID == '' || secrets.AWS_SECRET_ACCESS_KEY == '') && secrets.AWS_ROLE_TO_ASSUME != '' }}
+        if: ${{ steps.aws-auth.outputs.has_keys != 'true' && steps.aws-auth.outputs.has_role == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
