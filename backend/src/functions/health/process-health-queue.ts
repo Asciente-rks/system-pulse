@@ -3,7 +3,6 @@ import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import { enqueueHealthCheck } from "../../services/queue-service.js";
 import { publishHealthStatusEvent } from "../../services/notification-service.js";
-import { archiveHealthLogToS3 } from "../../services/log-archive-service.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
 import { shouldUseRenderWakeupWorkflow } from "../../utils/health-workflow.js";
 
@@ -56,24 +55,6 @@ export const processHealthCheckQueue: SQSHandler = async (
         attempt: message.attempt,
         triggerSource:
           message.attempt > 1 ? "delayed-recheck" : "manual-trigger",
-      });
-
-      await archiveHealthLogToS3({
-        systemId: system.id,
-        checkedAt: result.lastChecked,
-        payload: {
-          systemId: system.id,
-          systemName: system.name,
-          systemUrl: system.url,
-          status: result.status,
-          checkedAt: result.lastChecked,
-          responseCode: result.lastResponseCode,
-          responseTimeMs: result.responseTimeMs,
-          checkedUrl: result.checkedUrl,
-          attempt: message.attempt,
-          requestedBy: message.requestedBy,
-          requestedAt: message.requestedAt,
-        },
       });
 
       await publishHealthStatusEvent({
