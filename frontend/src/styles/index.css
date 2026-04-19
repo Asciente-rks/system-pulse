@@ -1,0 +1,260 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+:root {
+  --bg: #f3f5ee;
+  --ink: #102121;
+  --muted: #4f6161;
+  --panel: #ffffffd6;
+  --line: #b4c4c4;
+  --accent: #0c8f7a;
+  --accent-warm: #ed7b1a;
+  --accent-soft: #2274a5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10% 10%, #fff7df 0%, transparent 35%),
+    radial-gradient(circle at 90% 10%, #daf4f0 0%, transparent 38%),
+    linear-gradient(120deg, #f3f5ee 0%, #d7e9e6 100%);
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.app-shell {
+  min-height: 100%;
+  position: relative;
+}
+
+.bg-aura {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    125deg,
+    transparent 0 26px,
+    rgba(16, 33, 33, 0.03) 26px 30px
+  );
+  opacity: 0.35;
+}
+
+.container-wrap {
+  width: min(1080px, calc(100% - 2rem));
+  margin: 0 auto;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  background: #f3f5eec9;
+  border-bottom: 1px solid var(--line);
+}
+
+.page-content {
+  padding: 1.25rem 0 2rem;
+}
+
+.nav-grid {
+  padding: 1rem 0;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.brand-block {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.brand-title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.nav-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  background: #ffffffbf;
+  padding: 0.35rem 0.72rem;
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+
+.nav-link:hover {
+  border-color: var(--accent);
+}
+
+.session-controls {
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: auto minmax(140px, 190px) auto minmax(220px, 1fr);
+  align-items: center;
+}
+
+.field-label {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.field-input {
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.54rem 0.62rem;
+  font-size: 0.92rem;
+  width: 100%;
+  background: #fff;
+}
+
+.stack-lg {
+  display: grid;
+  gap: 1rem;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 1rem;
+  background: var(--panel);
+  box-shadow: 0 10px 24px rgba(16, 33, 33, 0.08);
+  padding: 1rem;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.panel-subtitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.panel-copy {
+  margin: 0.6rem 0 0;
+  color: var(--muted);
+}
+
+.form-grid {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.8rem;
+}
+
+.form-grid-2col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-field {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.btn {
+  border: none;
+  border-radius: 0.65rem;
+  padding: 0.6rem 0.95rem;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+}
+
+.btn-success {
+  background: #2b9a56;
+}
+
+.btn-warning {
+  background: var(--accent-warm);
+}
+
+.btn-accent {
+  background: var(--accent-soft);
+}
+
+.result-box {
+  margin-top: 0.8rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--line);
+  background: #f9fcfc;
+  padding: 0.7rem;
+  font-size: 0.76rem;
+  max-height: 320px;
+  overflow: auto;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.pill-grid {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.pill {
+  border-radius: 999px;
+  padding: 0.35rem 0.62rem;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 0.8rem;
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.steps-list {
+  margin: 0.7rem 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+@media (max-width: 900px) {
+  .session-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid-2col {
+    grid-template-columns: 1fr;
+  }
+}
