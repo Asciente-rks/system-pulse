@@ -29,6 +29,7 @@ jobs:
       SERVICE_NAME: system-pulse
       STAGE: ${{ github.event.inputs.stage || 'dev' }}
       AWS_REGION: ${{ github.event.inputs.region || 'ap-southeast-1' }}
+      LAMBDA_KMS_KEY_ARN: ${{ vars.LAMBDA_KMS_KEY_ARN || 'alias/aws/lambda' }}
       FRONTEND_URL: ${{ vars.FRONTEND_URL }}
       EMAIL_USER: ${{ secrets.EMAIL_USER }}
       EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
@@ -341,6 +342,7 @@ jobs:
                 --handler "${HANDLER}" \
                 --timeout "${TIMEOUT}" \
                 --memory-size "${MEMORY}" \
+                --kms-key-arn "${LAMBDA_KMS_KEY_ARN}" \
                 --environment file:///tmp/lambda-environment.json >/dev/null
             else
               aws lambda create-function \
@@ -350,6 +352,7 @@ jobs:
                 --handler "${HANDLER}" \
                 --timeout "${TIMEOUT}" \
                 --memory-size "${MEMORY}" \
+                --kms-key-arn "${LAMBDA_KMS_KEY_ARN}" \
                 --zip-file fileb://backend.zip \
                 --environment file:///tmp/lambda-environment.json >/dev/null
 
