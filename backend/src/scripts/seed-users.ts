@@ -1,15 +1,23 @@
+import "dotenv/config";
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
 
 async function seed() {
-  const tableName = process.env.USERS_TABLE || process.env.TABLE_NAME;
+  const tableName =
+    process.argv[2] ||
+    process.env.USERS_TABLE ||
+    process.env.TABLE_NAME ||
+    process.env.SYSTEM_PULSE_TABLE;
   if (!tableName) {
-    console.error("USERS_TABLE or TABLE_NAME env var must be set");
+    console.error(
+      "Provide table name as arg or set USERS_TABLE/TABLE_NAME/SYSTEM_PULSE_TABLE",
+    );
     process.exit(1);
   }
 
   const now = new Date().toISOString();
+  let failureCount = 0;
 
   const users = [
     {
@@ -70,7 +78,12 @@ async function seed() {
       console.log(`Seeded user ${u.id}`);
     } catch (err) {
       console.error(`Failed to seed ${u.id}:`, err);
+      failureCount += 1;
     }
+  }
+
+  if (failureCount > 0) {
+    throw new Error(`Seeding failed for ${failureCount} user(s)`);
   }
 
   console.log("Seeding complete");

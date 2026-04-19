@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "package": "npm run build && npm prune --omit=dev",
     "test": "echo \"No automated tests configured\"",
-    "seed": "ts-node-esm src/scripts/seed-users.ts"
+    "seed": "npm run build && node dist/scripts/seed-users.js"
   },
   "keywords": [],
   "author": "",
