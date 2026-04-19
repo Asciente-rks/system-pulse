@@ -551,6 +551,36 @@ select.field-input {
   font-size: 1rem;
 }
 
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.16rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.45rem;
+}
+
+.status-pill-up {
+  color: #0f7d36;
+  background: rgba(25, 170, 79, 0.16);
+  border: 1px solid rgba(25, 170, 79, 0.35);
+}
+
+.status-pill-down {
+  color: #b83535;
+  background: rgba(216, 72, 72, 0.14);
+  border: 1px solid rgba(216, 72, 72, 0.35);
+}
+
+.status-pill-unknown {
+  color: #6f5d17;
+  background: rgba(226, 184, 69, 0.18);
+  border: 1px solid rgba(210, 165, 45, 0.35);
+}
+
 .system-url {
   overflow-wrap: anywhere;
   word-break: break-word;

@@ -8,6 +8,7 @@ import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
 import type { CreateUserInput } from "../../types/user.js";
 import { sendInviteEmail } from "../../services/email-service.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
 
 export const createUserInvitation = async (
   event: APIGatewayProxyEvent,
@@ -75,7 +76,7 @@ export const createUserInvitation = async (
     const { user, inviteToken, inviteEligibilityExpiresAt } =
       await service.createUserInvitation(validated);
 
-    const frontend = process.env.FRONTEND_URL || "http://localhost:5173";
+    const frontend = resolveFrontendBaseUrl(event.headers);
     const inviteLink = `${frontend}/accept-invite?token=${inviteToken}`;
     let emailSent = false;
 

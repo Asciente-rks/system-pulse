@@ -8,6 +8,7 @@ import { parse } from "../../utils/parse.js";
 import { forgotPasswordSchema } from "../../validation/user-validation.js";
 import { sendPasswordResetEmail } from "../../services/email-service.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
 
 interface ForgotPasswordBody {
   email: string;
@@ -88,7 +89,7 @@ export const forgotPassword = async (
         }),
       );
 
-      const frontend = process.env.FRONTEND_URL || "http://localhost:5173";
+      const frontend = resolveFrontendBaseUrl(event.headers);
       const resetLink = `${frontend}/reset-password?token=${resetToken}`;
 
       try {

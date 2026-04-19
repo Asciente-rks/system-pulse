@@ -16,6 +16,11 @@ import {
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import AestheticSelect from "../components/AestheticSelect";
+import {
+  getSystemHealthStatus,
+  normalizeHealthStatus,
+  statusPillClassName,
+} from "../utils/health-status";
 
 type AdminTab = "overview" | "systems" | "users";
 
@@ -234,6 +239,42 @@ export default function AdminDashboard() {
 
       setLogsSystemId(systemId);
       setLogsResult(response as unknown as Record<string, unknown>);
+
+      const latestLog = (
+        response.data as
+          | {
+              logs?: Array<{
+                status?: unknown;
+                checkedAt?: string;
+                responseCode?: number;
+                responseTimeMs?: number;
+              }>;
+            }
+          | undefined
+      )?.logs?.[0];
+
+      if (latestLog) {
+        setSystems((current) =>
+          current.map((system) => {
+            if (system.id !== systemId) {
+              return system;
+            }
+
+            return {
+              ...system,
+              status: normalizeHealthStatus(
+                latestLog.status,
+                latestLog.responseCode,
+              ),
+              lastChecked: latestLog.checkedAt || system.lastChecked,
+              lastResponseCode:
+                latestLog.responseCode ?? system.lastResponseCode,
+              responseTimeMs: latestLog.responseTimeMs ?? system.responseTimeMs,
+            };
+          }),
+        );
+      }
+
       setActiveTab("systems");
     } finally {
       setBusy(null);
@@ -487,49 +528,54 @@ export default function AdminDashboard() {
           </form>
 
           <div className="grid-cards">
-            {systems.map((system) => (
-              <article className="system-card" key={system.id}>
-                <div>
-                  <p className="system-title">{system.name}</p>
-                  <p className="panel-copy system-url">{system.url}</p>
-                  <p className="panel-copy">
-                    Workflow: {system.deploymentMode || "standard"}
-                  </p>
-                  <p className="panel-copy">
-                    Status: {system.status || "UNKNOWN"}
-                  </p>
-                </div>
+            {systems.map((system) => {
+              const status = getSystemHealthStatus(system);
 
-                <div className="button-row system-actions system-actions-3">
-                  <button
-                    className="btn btn-success system-action-btn"
-                    onClick={() => handleTrigger(system.id)}
-                    disabled={
-                      busy === `trigger-${system.id}` || isChecking(system.id)
-                    }
-                  >
-                    {busy === `trigger-${system.id}`
-                      ? "Queueing..."
-                      : isChecking(system.id)
-                        ? "Checking..."
-                        : "Trigger"}
-                  </button>
-                  <button
-                    className="btn btn-warning system-action-btn"
-                    onClick={() => handleLoadLogs(system.id)}
-                    disabled={busy === `logs-${system.id}`}
-                  >
-                    {busy === `logs-${system.id}` ? "Loading..." : "Logs"}
-                  </button>
-                  <button
-                    className="btn btn-danger system-action-btn"
-                    onClick={() => setDeleteSystemTarget(system)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
+              return (
+                <article className="system-card" key={system.id}>
+                  <div>
+                    <span className={statusPillClassName(status)}>
+                      {status}
+                    </span>
+                    <p className="system-title">{system.name}</p>
+                    <p className="panel-copy system-url">{system.url}</p>
+                    <p className="panel-copy">
+                      Workflow: {system.deploymentMode || "standard"}
+                    </p>
+                    <p className="panel-copy">Status: {status}</p>
+                  </div>
+
+                  <div className="button-row system-actions system-actions-3">
+                    <button
+                      className="btn btn-success system-action-btn"
+                      onClick={() => handleTrigger(system.id)}
+                      disabled={
+                        busy === `trigger-${system.id}` || isChecking(system.id)
+                      }
+                    >
+                      {busy === `trigger-${system.id}`
+                        ? "Queueing..."
+                        : isChecking(system.id)
+                          ? "Checking..."
+                          : "Trigger"}
+                    </button>
+                    <button
+                      className="btn btn-warning system-action-btn"
+                      onClick={() => handleLoadLogs(system.id)}
+                      disabled={busy === `logs-${system.id}`}
+                    >
+                      {busy === `logs-${system.id}` ? "Loading..." : "Logs"}
+                    </button>
+                    <button
+                      className="btn btn-danger system-action-btn"
+                      onClick={() => setDeleteSystemTarget(system)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
 
           {logsResult && (

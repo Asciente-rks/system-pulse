@@ -5,6 +5,11 @@ import {
   triggerHealth,
   type SystemSummary,
 } from "../services/api";
+import {
+  getSystemHealthStatus,
+  normalizeHealthStatus,
+  statusPillClassName,
+} from "../utils/health-status";
 
 type TesterTab = "systems" | "logs";
 
@@ -112,6 +117,42 @@ export default function TesterDashboard() {
 
       setLogsSystemId(systemId);
       setLogsResult(response as unknown as Record<string, unknown>);
+
+      const latestLog = (
+        response.data as
+          | {
+              logs?: Array<{
+                status?: unknown;
+                checkedAt?: string;
+                responseCode?: number;
+                responseTimeMs?: number;
+              }>;
+            }
+          | undefined
+      )?.logs?.[0];
+
+      if (latestLog) {
+        setSystems((current) =>
+          current.map((system) => {
+            if (system.id !== systemId) {
+              return system;
+            }
+
+            return {
+              ...system,
+              status: normalizeHealthStatus(
+                latestLog.status,
+                latestLog.responseCode,
+              ),
+              lastChecked: latestLog.checkedAt || system.lastChecked,
+              lastResponseCode:
+                latestLog.responseCode ?? system.lastResponseCode,
+              responseTimeMs: latestLog.responseTimeMs ?? system.responseTimeMs,
+            };
+          }),
+        );
+      }
+
       setActiveTab("logs");
     } finally {
       setBusy(null);
@@ -158,43 +199,50 @@ export default function TesterDashboard() {
           </div>
 
           <div className="grid-cards">
-            {systems.map((system) => (
-              <article key={system.id} className="system-card">
-                <div>
-                  <p className="system-title">{system.name}</p>
-                  <p className="panel-copy system-url">{system.url}</p>
-                  <p className="panel-copy">
-                    Status: {system.status || "UNKNOWN"}
-                  </p>
-                  <p className="panel-copy">
-                    Last check: {system.lastChecked || "No checks yet"}
-                  </p>
-                </div>
+            {systems.map((system) => {
+              const status = getSystemHealthStatus(system);
 
-                <div className="button-row system-actions system-actions-2">
-                  <button
-                    className="btn btn-success system-action-btn"
-                    onClick={() => handleTrigger(system.id)}
-                    disabled={
-                      busy === `trigger-${system.id}` || isChecking(system.id)
-                    }
-                  >
-                    {busy === `trigger-${system.id}`
-                      ? "Queueing..."
-                      : isChecking(system.id)
-                        ? "Checking..."
-                        : "Trigger"}
-                  </button>
-                  <button
-                    className="btn btn-warning system-action-btn"
-                    onClick={() => handleLogs(system.id)}
-                    disabled={busy === `logs-${system.id}`}
-                  >
-                    {busy === `logs-${system.id}` ? "Loading..." : "View Logs"}
-                  </button>
-                </div>
-              </article>
-            ))}
+              return (
+                <article key={system.id} className="system-card">
+                  <div>
+                    <span className={statusPillClassName(status)}>
+                      {status}
+                    </span>
+                    <p className="system-title">{system.name}</p>
+                    <p className="panel-copy system-url">{system.url}</p>
+                    <p className="panel-copy">Status: {status}</p>
+                    <p className="panel-copy">
+                      Last check: {system.lastChecked || "No checks yet"}
+                    </p>
+                  </div>
+
+                  <div className="button-row system-actions system-actions-2">
+                    <button
+                      className="btn btn-success system-action-btn"
+                      onClick={() => handleTrigger(system.id)}
+                      disabled={
+                        busy === `trigger-${system.id}` || isChecking(system.id)
+                      }
+                    >
+                      {busy === `trigger-${system.id}`
+                        ? "Queueing..."
+                        : isChecking(system.id)
+                          ? "Checking..."
+                          : "Trigger"}
+                    </button>
+                    <button
+                      className="btn btn-warning system-action-btn"
+                      onClick={() => handleLogs(system.id)}
+                      disabled={busy === `logs-${system.id}`}
+                    >
+                      {busy === `logs-${system.id}`
+                        ? "Loading..."
+                        : "View Logs"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
 
           {systems.length === 0 && (
