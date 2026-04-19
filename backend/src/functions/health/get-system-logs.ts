@@ -4,6 +4,7 @@ import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
 
 export const getSystemLogs = async (
   event: APIGatewayProxyEvent,
@@ -17,6 +18,15 @@ export const getSystemLogs = async (
         body: JSON.stringify({ message: "SYSTEM_PULSE_TABLE not set" }),
       };
     }
+
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "systems-logs",
+      limit: 60,
+      windowSeconds: 60,
+    });
 
     const systemId = event.pathParameters?.id;
     if (!systemId) {

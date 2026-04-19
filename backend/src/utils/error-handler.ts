@@ -11,10 +11,15 @@ export class HttpError extends Error {
 
 export const headers = {
   "content-type": "application/json",
+  "Cache-Control": "no-store",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, x-user-id, x-inviter-role",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
 };
 
 export const handleError = (e: unknown) => {

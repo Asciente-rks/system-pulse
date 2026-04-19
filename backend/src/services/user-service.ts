@@ -19,12 +19,20 @@ export const createUserService = (
   tableName: string,
 ) => {
   return {
-    async createUserInvitation(
-      input: CreateUserInput,
-    ): Promise<{ user: User; inviteToken: string }> {
+    async createUserInvitation(input: CreateUserInput): Promise<{
+      user: User;
+      inviteToken: string;
+      inviteEligibilityExpiresAt: string;
+    }> {
       const userId = uuidv4();
       const inviteToken = uuidv4();
       const createDate = new Date().toISOString();
+      const inviteEligibilityHours = Math.max(
+        1,
+        Number(process.env.INVITE_ELIGIBILITY_HOURS || 24),
+      );
+      const inviteExpiryMs =
+        Date.now() + inviteEligibilityHours * 60 * 60 * 1000;
 
       const user: User = {
         id: userId,
@@ -39,7 +47,7 @@ export const createUserService = (
         entityType: USER_PK,
         SK: `${SK_PREFIX_USER}${userId}`,
         inviteToken,
-        tokenExpiry: Date.now() + 24 * 60 * 60 * 1000,
+        tokenExpiry: inviteExpiryMs,
       };
 
       await docClient.send(
@@ -49,7 +57,11 @@ export const createUserService = (
         }),
       );
 
-      return { user, inviteToken };
+      return {
+        user,
+        inviteToken,
+        inviteEligibilityExpiresAt: new Date(inviteExpiryMs).toISOString(),
+      };
     },
   };
 };

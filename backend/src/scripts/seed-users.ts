@@ -1,5 +1,5 @@
 import { PutCommand } from "@aws-sdk/lib-dynamodb";
-import { docClient } from "../config/db.ts";
+import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
 
 async function seed() {
@@ -42,7 +42,6 @@ async function seed() {
   ];
 
   for (const u of users) {
-    // derive passwordHash for seeded users (default password: Password123!)
     const salt = randomBytes(16).toString("hex");
     const derived = scryptSync("Password123!", salt, 64).toString("hex");
     const passwordHash = `${salt}:${derived}`;

@@ -2,10 +2,37 @@ const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/g, "") ||
   "http://localhost:3000/dev";
 
-function buildHeaders() {
-  const h: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+export type AuthRole = "superadmin" | "admin" | "tester";
+export type DeploymentMode = "render" | "standard";
+export type DeploymentModeInput = DeploymentMode | "auto";
+
+export interface SessionUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: AuthRole;
+  status_: "Active" | "Pending" | "Suspended";
+  allowedSystemIds: string[];
+}
+
+export interface SystemSummary {
+  id: string;
+  name: string;
+  url: string;
+  deploymentMode?: DeploymentMode;
+  status?: "UP" | "DOWN" | "UNKNOWN";
+  createDate: string;
+  lastChecked?: string;
+  lastResponseCode?: number;
+  responseTimeMs?: number;
+}
+
+function buildHeaders(includeJsonContentType: boolean) {
+  const h: Record<string, string> = {};
+
+  if (includeJsonContentType) {
+    h["Content-Type"] = "application/json";
+  }
 
   const role = localStorage.getItem("role");
   const userId = localStorage.getItem("userId");
@@ -20,13 +47,25 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T & { _httpStatus: number }> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      ...buildHeaders(),
-      ...(init.headers || {}),
-    },
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        ...buildHeaders(Boolean(init.body)),
+        ...(init.headers || {}),
+      },
+    });
+  } catch (error) {
+    return {
+      _httpStatus: 0,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Network request failed. Check API URL and CORS setup.",
+    } as unknown as T & { _httpStatus: number };
+  }
 
   let parsed: unknown = null;
   try {
@@ -72,7 +111,11 @@ export async function acceptInvite(
   });
 }
 
-export async function createSystem(payload: { name: string; url: string }) {
+export async function createSystem(payload: {
+  name: string;
+  url: string;
+  deploymentMode?: DeploymentModeInput;
+}) {
   return request<Record<string, unknown>>("/systems", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -111,6 +154,78 @@ export async function getSystemLogs(systemId: string, limit = 20) {
     `/systems/${encodeURIComponent(systemId)}/logs?limit=${encodeURIComponent(String(limit))}`,
     {
       method: "GET",
+    },
+  );
+}
+
+export async function login(email: string, password: string) {
+  return request<{ data?: SessionUser; message?: string }>("/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function forgotPassword(email: string) {
+  return request<{ message?: string }>("/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function resetPassword(
+  token: string,
+  password: string,
+  confirmPassword: string,
+) {
+  return request<{ message?: string }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password, confirmPassword }),
+  });
+}
+
+export async function listSystems(limit = 100) {
+  return request<{ data?: { systems?: SystemSummary[] }; message?: string }>(
+    `/systems?limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+export async function listUsers(limit = 100) {
+  return request<{ data?: { users?: SessionUser[] }; message?: string }>(
+    `/users?limit=${encodeURIComponent(String(limit))}`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+export async function getUser(userId: string) {
+  return request<{ data?: SessionUser; message?: string }>(
+    `/users/${encodeURIComponent(userId)}`,
+    {
+      method: "GET",
+    },
+  );
+}
+
+export async function deleteUser(userId: string, actorPassword: string) {
+  return request<{ message?: string; data?: { userId: string } }>(
+    `/users/${encodeURIComponent(userId)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ actorPassword }),
+    },
+  );
+}
+
+export async function deleteSystem(systemId: string, actorPassword: string) {
+  return request<{ message?: string; data?: { systemId: string } }>(
+    `/systems/${encodeURIComponent(systemId)}`,
+    {
+      method: "DELETE",
+      body: JSON.stringify({ actorPassword }),
     },
   );
 }

@@ -6,6 +6,7 @@ import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import type { CreateHealthInput } from "../../types/health.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
 
 export const createHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -23,6 +24,15 @@ export const createHealthCheck = async (
         }),
       };
     }
+
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "systems-create",
+      limit: 20,
+      windowSeconds: 60,
+    });
 
     const body = parse(event.body) as Record<string, unknown>;
 

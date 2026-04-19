@@ -4,8 +4,6 @@
     "types": ["node"],
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "allowImportingTsExtensions": true,
-    "noEmit": true,
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,

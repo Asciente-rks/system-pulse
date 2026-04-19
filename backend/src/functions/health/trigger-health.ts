@@ -6,6 +6,11 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
 import { parse } from "../../utils/parse.js";
+import {
+  resolveDeploymentMode,
+  shouldUseRenderWakeupWorkflow,
+} from "../../utils/health-workflow.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
 
 export const triggerHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -18,6 +23,15 @@ export const triggerHealthCheck = async (
         headers,
         body: JSON.stringify({ message: "SYSTEM_PULSE_TABLE not set" }),
       };
+
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "systems-trigger-health",
+      limit: 60,
+      windowSeconds: 60,
+    });
 
     const queueUrl = process.env.HEALTH_CHECK_QUEUE_URL;
     if (!queueUrl) {
@@ -99,6 +113,18 @@ export const triggerHealthCheck = async (
         body: JSON.stringify({ message: "system not found" }),
       };
 
+    const deploymentMode = resolveDeploymentMode(
+      system.url,
+      system.deploymentMode,
+    );
+    const recheckEnabled = shouldUseRenderWakeupWorkflow(
+      system.url,
+      system.deploymentMode,
+    );
+    const delayedRecheckSeconds = recheckEnabled
+      ? Number(process.env.RENDER_WAKEUP_DELAY_SECONDS || 90)
+      : 0;
+
     const queuedMessage: HealthCheckQueueMessage = {
       systemId,
       attempt: 1,
@@ -113,13 +139,15 @@ export const triggerHealthCheck = async (
       headers,
       body: JSON.stringify({
         status: 202,
-        message: "Health check queued. Automatic wake-up recheck is enabled.",
+        message: recheckEnabled
+          ? "Health check queued. Automatic wake-up recheck is enabled for this Render system."
+          : "Health check queued. Standard single-pass check is enabled for this system.",
         data: {
           systemId,
+          deploymentMode,
           attempt: 1,
-          delayedRecheckSeconds: Number(
-            process.env.RENDER_WAKEUP_DELAY_SECONDS || 90,
-          ),
+          recheckEnabled,
+          delayedRecheckSeconds,
         },
       }),
     };

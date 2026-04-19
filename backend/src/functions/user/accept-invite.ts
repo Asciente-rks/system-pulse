@@ -4,13 +4,7 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { setupPasswordSchema } from "../../validation/user-validation.js";
 import { docClient } from "../../config/db.js";
 import { QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { scryptSync, randomBytes } from "crypto";
-
-function hashPassword(password: string) {
-  const salt = randomBytes(16).toString("hex");
-  const derived = scryptSync(password, salt, 64).toString("hex");
-  return `${salt}:${derived}`;
-}
+import { hashPassword } from "../../utils/password.js";
 
 export const acceptUserInvitation = async (
   event: APIGatewayProxyEvent,
@@ -40,7 +34,6 @@ export const acceptUserInvitation = async (
     })) as Record<string, string>;
     const password = validated.password;
 
-    // lookup by invite token via GSI
     const q = await docClient.send(
       new QueryCommand({
         TableName: tableName,
@@ -68,7 +61,9 @@ export const acceptUserInvitation = async (
       return {
         statusCode: 400,
         headers,
-        body: JSON.stringify({ message: "Invite token expired" }),
+        body: JSON.stringify({
+          message: "Invite eligibility expired. Request a new invite.",
+        }),
       };
     }
 

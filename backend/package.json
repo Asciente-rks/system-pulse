@@ -7,6 +7,10 @@
   "scripts": {
     "build": "tsc --noEmit",
     "deploy": "serverless deploy",
+    "deploy:dev": "serverless deploy --stage dev --region ap-southeast-1",
+    "deploy:prod": "serverless deploy --stage prod --region ap-southeast-1",
+    "info:dev": "serverless info --stage dev --region ap-southeast-1",
+    "remove:dev": "serverless remove --stage dev --region ap-southeast-1",
     "test": "echo \"No automated tests configured\"",
     "seed": "ts-node-esm src/scripts/seed-users.ts"
   },

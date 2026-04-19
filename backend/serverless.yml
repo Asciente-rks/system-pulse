@@ -18,14 +18,16 @@ provider:
     HEALTH_CHECK_QUEUE_URL: !Ref HealthCheckQueue
     HEALTH_STATUS_TOPIC_ARN: !Ref HealthStatusTopic
     HEALTH_LOGS_BUCKET: !Ref HealthLogsBucket
-    RENDER_WAKEUP_DELAY_SECONDS: ${env:RENDER_WAKEUP_DELAY_SECONDS, '90'}
-    FRONTEND_URL: ${env:FRONTEND_URL, ''}
-    EMAIL_USER: ${env:EMAIL_USER, ''}
-    EMAIL_PASS: ${env:EMAIL_PASS, ''}
-    SHOW_INVITE_LINK: ${env:SHOW_INVITE_LINK, 'false'}
-    ENABLE_HEALTH_LOGS: ${env:ENABLE_HEALTH_LOGS, 'true'}
-    ENABLE_SNS_NOTIFICATIONS: ${env:ENABLE_SNS_NOTIFICATIONS, 'false'}
-    ENABLE_S3_ARCHIVE: ${env:ENABLE_S3_ARCHIVE, 'false'}
+    RENDER_WAKEUP_DELAY_SECONDS: ${env:RENDER_WAKEUP_DELAY_SECONDS, file(./scripts/serverless-env.cjs):RENDER_WAKEUP_DELAY_SECONDS, '90'}
+    FRONTEND_URL: ${env:FRONTEND_URL, file(./scripts/serverless-env.cjs):FRONTEND_URL, ''}
+    EMAIL_USER: ${env:EMAIL_USER, file(./scripts/serverless-env.cjs):EMAIL_USER, ''}
+    EMAIL_PASS: ${env:EMAIL_PASS, file(./scripts/serverless-env.cjs):EMAIL_PASS, ''}
+    INVITE_ELIGIBILITY_HOURS: ${env:INVITE_ELIGIBILITY_HOURS, file(./scripts/serverless-env.cjs):INVITE_ELIGIBILITY_HOURS, '24'}
+    PASSWORD_RESET_ELIGIBILITY_MINUTES: ${env:PASSWORD_RESET_ELIGIBILITY_MINUTES, file(./scripts/serverless-env.cjs):PASSWORD_RESET_ELIGIBILITY_MINUTES, '30'}
+    SHOW_INVITE_LINK: ${env:SHOW_INVITE_LINK, file(./scripts/serverless-env.cjs):SHOW_INVITE_LINK, 'false'}
+    ENABLE_HEALTH_LOGS: ${env:ENABLE_HEALTH_LOGS, file(./scripts/serverless-env.cjs):ENABLE_HEALTH_LOGS, 'true'}
+    ENABLE_SNS_NOTIFICATIONS: ${env:ENABLE_SNS_NOTIFICATIONS, file(./scripts/serverless-env.cjs):ENABLE_SNS_NOTIFICATIONS, 'false'}
+    ENABLE_S3_ARCHIVE: ${env:ENABLE_S3_ARCHIVE, file(./scripts/serverless-env.cjs):ENABLE_S3_ARCHIVE, 'false'}
   iam:
     role:
       statements:
@@ -34,6 +36,7 @@ provider:
             - dynamodb:PutItem
             - dynamodb:GetItem
             - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
             - dynamodb:Query
           Resource:
             - !GetAtt SystemPulseSingleTable.Arn
@@ -60,13 +63,65 @@ provider:
             - !Sub "${HealthLogsBucket.Arn}/*"
 
 functions:
+  login:
+    handler: src/handler.login
+    events:
+      - http:
+          path: /auth/login
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  forgotPassword:
+    handler: src/handler.forgotPassword
+    events:
+      - http:
+          path: /auth/forgot-password
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  resetPassword:
+    handler: src/handler.resetPassword
+    events:
+      - http:
+          path: /auth/reset-password
+          method: post
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
   createUserInvitation:
     handler: src/handler.createUserInvitation
     events:
       - http:
           path: /users/invite
           method: post
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   acceptUserInvitation:
     handler: src/handler.acceptUserInvitation
@@ -74,7 +129,14 @@ functions:
       - http:
           path: /users/invite/accept
           method: post
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   assignSystemAccess:
     handler: src/handler.assignSystemAccess
@@ -82,7 +144,74 @@ functions:
       - http:
           path: /users/{id}/systems
           method: post
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  listUsers:
+    handler: src/handler.listUsers
+    events:
+      - http:
+          path: /users
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  getUser:
+    handler: src/handler.getUser
+    events:
+      - http:
+          path: /users/{id}
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  deleteUser:
+    handler: src/handler.deleteUser
+    events:
+      - http:
+          path: /users/{id}
+          method: delete
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  listSystems:
+    handler: src/handler.listSystems
+    events:
+      - http:
+          path: /systems
+          method: get
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   createHealthCheck:
     handler: src/handler.createHealthCheck
@@ -90,7 +219,29 @@ functions:
       - http:
           path: /systems
           method: post
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
+
+  deleteSystem:
+    handler: src/handler.deleteSystem
+    events:
+      - http:
+          path: /systems/{id}
+          method: delete
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   triggerHealthCheck:
     handler: src/handler.triggerHealthCheck
@@ -98,7 +249,14 @@ functions:
       - http:
           path: /systems/{id}/trigger
           method: post
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   getSystemLogs:
     handler: src/handler.getSystemLogs
@@ -106,7 +264,14 @@ functions:
       - http:
           path: /systems/{id}/logs
           method: get
-          cors: true
+          cors:
+            origin: "*"
+            headers:
+              - Content-Type
+              - Authorization
+              - x-user-id
+              - x-inviter-role
+            allowCredentials: false
 
   processHealthCheckQueue:
     handler: src/handler.processHealthCheckQueue
@@ -123,10 +288,7 @@ resources:
       Type: AWS::DynamoDB::Table
       Properties:
         TableName: ${self:provider.environment.TABLE_NAME}
-        BillingMode: PROVISIONED
-        ProvisionedThroughput:
-          ReadCapacityUnits: 1
-          WriteCapacityUnits: 1
+        BillingMode: PAY_PER_REQUEST
         AttributeDefinitions:
           - AttributeName: PK
             AttributeType: S
@@ -137,6 +299,8 @@ resources:
           - AttributeName: status_
             AttributeType: S
           - AttributeName: inviteToken
+            AttributeType: S
+          - AttributeName: resetToken
             AttributeType: S
         KeySchema:
           - AttributeName: PK
@@ -152,18 +316,18 @@ resources:
                 KeyType: RANGE
             Projection:
               ProjectionType: ALL
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
           - IndexName: InviteTokenIndex
             KeySchema:
               - AttributeName: inviteToken
                 KeyType: HASH
             Projection:
               ProjectionType: ALL
-            ProvisionedThroughput:
-              ReadCapacityUnits: 1
-              WriteCapacityUnits: 1
+          - IndexName: ResetTokenIndex
+            KeySchema:
+              - AttributeName: resetToken
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
 
     HealthCheckDlq:
       Type: AWS::SQS::Queue
@@ -201,7 +365,29 @@ resources:
           Rules:
             - Id: ExpireOldHealthLogs
               Status: Enabled
-              ExpirationInDays: 30
+              ExpirationInDays: 1
+
+    ApiGatewayResponseDefault4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,x-user-id,x-inviter-role'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+
+    ApiGatewayResponseDefault5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseType: DEFAULT_5XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,Authorization,x-user-id,x-inviter-role'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
 
   Outputs:
     SystemPulseTableName:

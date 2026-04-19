@@ -7,6 +7,7 @@ import {
 } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
 import { HealthCheck, CreateHealthInput } from "../types/health.js";
+import { resolveDeploymentMode } from "../utils/health-workflow.js";
 
 const SYSTEMS_PK = "SYSTEM";
 const SK_PREFIX_SYSTEM = "SYS#";
@@ -222,10 +223,15 @@ export const createHealthService = (
     async createHealthCheck(input: CreateHealthInput): Promise<HealthCheck> {
       const id = uuidv4();
       const createDate = new Date().toISOString();
+      const deploymentMode = resolveDeploymentMode(
+        input.url,
+        input.deploymentMode,
+      );
 
       const item: HealthCheck = {
         id,
         ...input,
+        deploymentMode,
         status: "UNKNOWN",
         createDate,
       };

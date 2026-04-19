@@ -1,7 +1,15 @@
 export { createUserInvitation } from "./functions/user/create-user.js";
+export { listUsers } from "./functions/user/list-users.js";
+export { getUser } from "./functions/user/get-user.js";
+export { deleteUser } from "./functions/user/delete-user.js";
+export { login } from "./functions/auth/login.js";
+export { forgotPassword } from "./functions/auth/forgot-password.js";
+export { resetPassword } from "./functions/auth/reset-password.js";
 export { createHealthCheck } from "./functions/health/check-health.js";
 export { acceptUserInvitation } from "./functions/user/accept-invite.js";
 export { assignSystemAccess } from "./functions/user/assign-system-access.js";
+export { listSystems } from "./functions/health/list-systems.js";
+export { deleteSystem } from "./functions/health/delete-system.js";
 export { triggerHealthCheck } from "./functions/health/trigger-health.js";
 export { processHealthCheckQueue } from "./functions/health/process-health-queue.js";
 export { getSystemLogs } from "./functions/health/get-system-logs.js";

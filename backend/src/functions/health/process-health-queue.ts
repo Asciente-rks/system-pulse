@@ -5,6 +5,7 @@ import { enqueueHealthCheck } from "../../services/queue-service.js";
 import { publishHealthStatusEvent } from "../../services/notification-service.js";
 import { archiveHealthLogToS3 } from "../../services/log-archive-service.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
+import { shouldUseRenderWakeupWorkflow } from "../../utils/health-workflow.js";
 
 const parseQueueMessage = (record: SQSRecord): HealthCheckQueueMessage => {
   const parsed = JSON.parse(record.body) as Partial<HealthCheckQueueMessage>;
@@ -87,7 +88,16 @@ export const processHealthCheckQueue: SQSHandler = async (
         checkedUrl: result.checkedUrl,
       });
 
-      if (result.status !== "UP" && message.attempt === 1) {
+      const renderWakeupEnabled = shouldUseRenderWakeupWorkflow(
+        system.url,
+        (system as { deploymentMode?: string }).deploymentMode,
+      );
+
+      if (
+        renderWakeupEnabled &&
+        result.status !== "UP" &&
+        message.attempt === 1
+      ) {
         await enqueueHealthCheck(
           {
             systemId: system.id,

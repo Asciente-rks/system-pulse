@@ -16,3 +16,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+scripts/
+assets/
+
+src/scripts/
+
