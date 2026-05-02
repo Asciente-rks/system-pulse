@@ -44,6 +44,52 @@ interface HealthLogRecord {
   errorMessage?: string;
 }
 
+const persistHealthProbeResult = async (
+  docClient: DynamoDBDocumentClient,
+  tableName: string,
+  id: string,
+  result: HealthProbeResult,
+): Promise<void> => {
+  const status = result.status;
+
+  if (status === "UP") {
+    await docClient.send(
+      new UpdateCommand({
+        TableName: tableName,
+        Key: { PK: SYSTEMS_PK, SK: `${SK_PREFIX_SYSTEM}${id}` },
+        UpdateExpression:
+          "SET #status = :status, lastChecked = :checked, lastResponseCode = :responseCode, responseTimeMs = :responseTime",
+        ExpressionAttributeNames: {
+          "#status": "status",
+        },
+        ExpressionAttributeValues: {
+          ":status": status,
+          ":checked": result.lastChecked,
+          ":responseCode": result.lastResponseCode,
+          ":responseTime": result.responseTimeMs,
+        },
+      }),
+    );
+    return;
+  }
+
+  await docClient.send(
+    new UpdateCommand({
+      TableName: tableName,
+      Key: { PK: SYSTEMS_PK, SK: `${SK_PREFIX_SYSTEM}${id}` },
+      UpdateExpression:
+        "SET #status = :status, lastChecked = :checked REMOVE lastResponseCode, responseTimeMs",
+      ExpressionAttributeNames: {
+        "#status": "status",
+      },
+      ExpressionAttributeValues: {
+        ":status": status,
+        ":checked": result.lastChecked,
+      },
+    }),
+  );
+};
+
 export const createHealthService = (
   docClient: DynamoDBDocumentClient,
   tableName: string,
@@ -101,11 +147,13 @@ export const createHealthService = (
       timeoutMs?: number;
       attempt?: number;
       triggerSource?: string;
+      persist?: boolean;
     },
   ): Promise<HealthProbeResult> => {
     const timeoutMs = options?.timeoutMs ?? 5000;
     const attempt = options?.attempt ?? 1;
     const triggerSource = options?.triggerSource ?? "manual";
+    const persist = options?.persist ?? true;
 
     const trimmed = url.replace(/\/+$/g, "");
     const candidates = [`${trimmed}/health`, trimmed];
@@ -134,23 +182,15 @@ export const createHealthService = (
         const status: "UP" | "DOWN" = response.ok ? "UP" : "DOWN";
         const now = new Date().toISOString();
 
-        await docClient.send(
-          new UpdateCommand({
-            TableName: tableName,
-            Key: { PK: SYSTEMS_PK, SK: `${SK_PREFIX_SYSTEM}${id}` },
-            UpdateExpression:
-              "SET #status = :status, lastChecked = :checked, lastResponseCode = :responseCode, responseTimeMs = :responseTime",
-            ExpressionAttributeNames: {
-              "#status": "status",
-            },
-            ExpressionAttributeValues: {
-              ":status": status,
-              ":checked": now,
-              ":responseCode": responseCode,
-              ":responseTime": responseTimeMs,
-            },
-          }),
-        );
+        if (persist) {
+          await persistHealthProbeResult(docClient, tableName, id, {
+            status,
+            lastChecked: now,
+            lastResponseCode: responseCode,
+            responseTimeMs,
+            checkedUrl,
+          });
+        }
 
         const result: HealthProbeResult = {
           status,
@@ -160,7 +200,9 @@ export const createHealthService = (
           checkedUrl,
         };
 
-        await persistHealthLog(id, result, attempt, triggerSource);
+        if (persist) {
+          await persistHealthLog(id, result, attempt, triggerSource);
+        }
         return result;
       } catch (error) {
         clearTimeout(timeout);
@@ -170,21 +212,14 @@ export const createHealthService = (
 
     const now = new Date().toISOString();
 
-    await docClient.send(
-      new UpdateCommand({
-        TableName: tableName,
-        Key: { PK: SYSTEMS_PK, SK: `${SK_PREFIX_SYSTEM}${id}` },
-        UpdateExpression:
-          "SET #status = :status, lastChecked = :checked REMOVE lastResponseCode, responseTimeMs",
-        ExpressionAttributeNames: {
-          "#status": "status",
-        },
-        ExpressionAttributeValues: {
-          ":status": "DOWN",
-          ":checked": now,
-        },
-      }),
-    );
+    if (persist) {
+      await persistHealthProbeResult(docClient, tableName, id, {
+        status: "DOWN",
+        lastChecked: now,
+        checkedUrl,
+        errorMessage,
+      });
+    }
 
     const failedResult: HealthProbeResult = {
       status: "DOWN",
@@ -193,7 +228,9 @@ export const createHealthService = (
       errorMessage,
     };
 
-    await persistHealthLog(id, failedResult, attempt, triggerSource);
+    if (persist) {
+      await persistHealthLog(id, failedResult, attempt, triggerSource);
+    }
     return failedResult;
   };
 
@@ -219,6 +256,13 @@ export const createHealthService = (
 
   return {
     getSystemById,
+
+    async persistHealthCheckResult(
+      id: string,
+      result: HealthProbeResult,
+    ): Promise<void> {
+      await persistHealthProbeResult(docClient, tableName, id, result);
+    },
 
     async createHealthCheck(input: CreateHealthInput): Promise<HealthCheck> {
       const id = uuidv4();

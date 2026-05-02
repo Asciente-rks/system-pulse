@@ -372,7 +372,7 @@ jobs:
           }
 
           deploy_function "${API_FUNCTION_NAME}" "dist/router-handler.api" 28 256
-          deploy_function "${WORKER_FUNCTION_NAME}" "dist/handler.processHealthCheckQueue" 60 256
+          deploy_function "${WORKER_FUNCTION_NAME}" "dist/handler.processHealthCheckQueue" 180 256
 
           if ! aws lambda get-function-url-config --function-name "${API_FUNCTION_NAME}" >/dev/null 2>&1; then
             aws lambda create-function-url-config \

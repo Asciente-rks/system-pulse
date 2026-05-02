@@ -1,10 +1,17 @@
 import type { SQSBatchResponse, SQSHandler, SQSRecord } from "aws-lambda";
 import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
-import { enqueueHealthCheck } from "../../services/queue-service.js";
 import { publishHealthStatusEvent } from "../../services/notification-service.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
 import { shouldUseRenderWakeupWorkflow } from "../../utils/health-workflow.js";
+
+const sleep = async (delayMs: number): Promise<void> => {
+  if (delayMs <= 0) {
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
+};
 
 const parseQueueMessage = (record: SQSRecord): HealthCheckQueueMessage => {
   const parsed = JSON.parse(record.body) as Partial<HealthCheckQueueMessage>;
@@ -51,44 +58,81 @@ export const processHealthCheckQueue: SQSHandler = async (
         continue;
       }
 
-      const result = await healthService.runHealthCheck(system.id, system.url, {
-        attempt: message.attempt,
-        triggerSource:
-          message.attempt > 1 ? "delayed-recheck" : "manual-trigger",
-      });
-
-      await publishHealthStatusEvent({
-        systemId: system.id,
-        systemName: system.name,
-        systemUrl: system.url,
-        status: result.status,
-        attempt: message.attempt,
-        checkedAt: result.lastChecked,
-        responseCode: result.lastResponseCode,
-        responseTimeMs: result.responseTimeMs,
-        checkedUrl: result.checkedUrl,
-      });
-
       const renderWakeupEnabled = shouldUseRenderWakeupWorkflow(
         system.url,
         (system as { deploymentMode?: string }).deploymentMode,
       );
 
-      if (
-        renderWakeupEnabled &&
-        result.status !== "UP" &&
-        message.attempt === 1
-      ) {
-        await enqueueHealthCheck(
-          {
+      const initialResult = await healthService.runHealthCheck(
+        system.id,
+        system.url,
+        {
+          attempt: message.attempt,
+          triggerSource:
+            message.attempt > 1 ? "delayed-recheck" : "manual-trigger",
+          persist: !renderWakeupEnabled || message.attempt > 1,
+        },
+      );
+
+      if (renderWakeupEnabled && message.attempt === 1) {
+        if (initialResult.status === "UP") {
+          await healthService.persistHealthCheckResult(
+            system.id,
+            initialResult,
+          );
+
+          await publishHealthStatusEvent({
             systemId: system.id,
+            systemName: system.name,
+            systemUrl: system.url,
+            status: initialResult.status,
+            attempt: message.attempt,
+            checkedAt: initialResult.lastChecked,
+            responseCode: initialResult.lastResponseCode,
+            responseTimeMs: initialResult.responseTimeMs,
+            checkedUrl: initialResult.checkedUrl,
+          });
+
+          continue;
+        }
+
+        await sleep(wakeupDelaySeconds * 1000);
+
+        const wakeupResult = await healthService.runHealthCheck(
+          system.id,
+          system.url,
+          {
             attempt: 2,
-            requestedAt: message.requestedAt,
-            requestedBy: message.requestedBy,
+            triggerSource: "delayed-recheck",
           },
-          wakeupDelaySeconds,
         );
+
+        await publishHealthStatusEvent({
+          systemId: system.id,
+          systemName: system.name,
+          systemUrl: system.url,
+          status: wakeupResult.status,
+          attempt: 2,
+          checkedAt: wakeupResult.lastChecked,
+          responseCode: wakeupResult.lastResponseCode,
+          responseTimeMs: wakeupResult.responseTimeMs,
+          checkedUrl: wakeupResult.checkedUrl,
+        });
+
+        continue;
       }
+
+      await publishHealthStatusEvent({
+        systemId: system.id,
+        systemName: system.name,
+        systemUrl: system.url,
+        status: initialResult.status,
+        attempt: message.attempt,
+        checkedAt: initialResult.lastChecked,
+        responseCode: initialResult.lastResponseCode,
+        responseTimeMs: initialResult.responseTimeMs,
+        checkedUrl: initialResult.checkedUrl,
+      });
     } catch (error) {
       console.error("Queue processing failed", {
         messageId: record.messageId,
