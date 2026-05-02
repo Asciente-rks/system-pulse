@@ -42,6 +42,7 @@ interface HealthLogRecord {
   attempt: number;
   triggerSource: string;
   errorMessage?: string;
+  expiresAt: number;
 }
 
 const persistHealthProbeResult = async (
@@ -116,6 +117,7 @@ export const createHealthService = (
     }
 
     const checkedAt = result.lastChecked;
+    const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
 
     const logRecord: HealthLogRecord = {
       PK: `${LOG_PK_PREFIX}${systemId}`,
@@ -130,6 +132,7 @@ export const createHealthService = (
       attempt,
       triggerSource,
       errorMessage: result.errorMessage,
+      expiresAt,
     };
 
     await docClient.send(

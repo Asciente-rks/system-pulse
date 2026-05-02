@@ -175,6 +175,21 @@ jobs:
 
           aws dynamodb wait table-exists --table-name "${TABLE_NAME}"
 
+          TTL_STATUS=$(aws dynamodb describe-time-to-live --table-name "${TABLE_NAME}" --query 'TimeToLiveDescription.TimeToLiveStatus' --output text 2>/dev/null || echo "DISABLED")
+
+          if [ "${TTL_STATUS}" != "ENABLED" ]; then
+            cat > /tmp/ttl-spec.json <<'JSON'
+          {
+            "Enabled": true,
+            "AttributeName": "expiresAt"
+          }
+          JSON
+
+            aws dynamodb update-time-to-live \
+              --table-name "${TABLE_NAME}" \
+              --time-to-live-specification file:///tmp/ttl-spec.json >/dev/null
+          fi
+
           if ! aws sqs get-queue-url --queue-name "${DLQ_NAME}" >/dev/null 2>&1; then
             aws sqs create-queue --queue-name "${DLQ_NAME}" >/dev/null
           fi
