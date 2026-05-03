@@ -2,6 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { enqueueHealthCheck } from "../../services/queue-service.js";
+import { invokeHealthWorker } from "../../services/worker-invoke-service.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
@@ -33,14 +34,9 @@ export const triggerHealthCheck = async (
       windowSeconds: 60,
     });
 
-    const queueUrl = process.env.HEALTH_CHECK_QUEUE_URL;
-    if (!queueUrl) {
-      return {
-        statusCode: 500,
-        headers,
-        body: JSON.stringify({ message: "HEALTH_CHECK_QUEUE_URL not set" }),
-      };
-    }
+    const dispatchMode = (
+      process.env.HEALTH_TRIGGER_TRANSPORT || "lambda-direct"
+    ).toLowerCase();
 
     const body = parse(event.body);
 
@@ -132,13 +128,27 @@ export const triggerHealthCheck = async (
       requestedAt: new Date().toISOString(),
     };
 
-    await enqueueHealthCheck(queuedMessage, 0);
+    if (dispatchMode === "sqs") {
+      const queueUrl = process.env.HEALTH_CHECK_QUEUE_URL;
+      if (!queueUrl) {
+        return {
+          statusCode: 500,
+          headers,
+          body: JSON.stringify({ message: "HEALTH_CHECK_QUEUE_URL not set" }),
+        };
+      }
+
+      await enqueueHealthCheck(queuedMessage, 0);
+    } else {
+      await invokeHealthWorker(queuedMessage);
+    }
 
     return {
       statusCode: 202,
       headers,
       body: JSON.stringify({
         status: 202,
+        transport: dispatchMode,
         message: recheckEnabled
           ? "Health check queued. Automatic wake-up recheck is enabled for this Render system."
           : "Health check queued. Standard single-pass check is enabled for this system.",
