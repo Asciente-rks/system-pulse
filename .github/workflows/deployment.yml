@@ -207,6 +207,7 @@ jobs:
           cat > /tmp/queue-attributes.json <<JSON
           {
             "VisibilityTimeout": "180",
+            "ReceiveMessageWaitTimeSeconds": "20",
             "RedrivePolicy": "{\"deadLetterTargetArn\":\"${DLQ_ARN}\",\"maxReceiveCount\":\"3\"}"
           }
           JSON
@@ -432,12 +433,16 @@ jobs:
               --function-name "${WORKER_FUNCTION_NAME}" \
               --event-source-arn "${QUEUE_ARN}" \
               --batch-size 5 \
+              --maximum-batching-window-in-seconds 20 \
+              --scaling-config MaximumConcurrency=2 \
               --function-response-types ReportBatchItemFailures \
               --enabled >/dev/null
           else
             aws lambda update-event-source-mapping \
               --uuid "${MAPPING_UUID}" \
               --batch-size 5 \
+              --maximum-batching-window-in-seconds 20 \
+              --scaling-config MaximumConcurrency=2 \
               --function-response-types ReportBatchItemFailures \
               --enabled >/dev/null
           fi
