@@ -459,9 +459,8 @@ jobs:
                 --enabled >/dev/null
             fi
           elif [ "${MAPPING_UUID}" != "None" ]; then
-            aws lambda update-event-source-mapping \
-              --uuid "${MAPPING_UUID}" \
-              --no-enabled >/dev/null
+            aws lambda delete-event-source-mapping \
+              --uuid "${MAPPING_UUID}" >/dev/null
           fi
 
           FUNCTION_URL=$(aws lambda get-function-url-config --function-name "${API_FUNCTION_NAME}" --query FunctionUrl --output text)
@@ -477,6 +476,7 @@ jobs:
             echo "- Worker Lambda: ${WORKER_FUNCTION_NAME}"
             echo "- Table: ${TABLE_NAME}"
             echo "- Queue URL: ${QUEUE_URL}"
+            echo "- Queue mapping enabled: ${ENABLE_QUEUE_WORKER_MAPPING}"
             echo "- Topic ARN: ${TOPIC_ARN}"
             echo "- Function URL: ${FUNCTION_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
