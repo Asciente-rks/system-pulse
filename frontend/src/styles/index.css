@@ -1193,3 +1193,16 @@ select.field-input {
   font-size: 11px;
   color: var(--muted);
 }
+
+.deletion-locked-note {
+  margin: 8px 0 12px 0;
+  padding: 8px 12px;
+  border: 1px dashed color-mix(in srgb, var(--warning) 55%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+}

@@ -299,9 +299,10 @@ System Pulse is **invite-only** — no public signup. The first user is created 
 
 | Email | Role | Password |
 |---|---|---|
-| `superadmin@example.local` | superadmin | `Password123!` |
 | `admin@example.local` | admin | `Password123!` |
 | `tester@example.local` | tester | `Password123!` |
+
+> The seeded `superadmin@example.local` account exists in the database for owner-only operations. Its credentials are intentionally **not** published in the README or in the Dev Tools quick-login panel — only the project owner has them.
 
 ### Inviting more users
 
@@ -318,7 +319,7 @@ System Pulse is **invite-only** — no public signup. The first user is created 
 
 ### Dev Tools quick-login
 
-The login page ships with a floating **⚙ Dev Tools** button in the bottom-right corner. Click it to one-shot sign in as Super Admin / Admin / Tester using the seeded credentials — handy for portfolio reviewers who don't want to type anything. The button still goes through the rate-limited `/auth/login` endpoint; it just skips the typing.
+The login page ships with a floating **⚙ Dev Tools** button in the bottom-right corner. Click it to one-shot sign in as **Admin** or **Tester** using the seeded credentials — handy for portfolio reviewers who don't want to type anything. (The superadmin account is intentionally left out so only the owner can sign in as superadmin.) The button still goes through the rate-limited `/auth/login` endpoint; it just skips the typing.
 
 ---
 

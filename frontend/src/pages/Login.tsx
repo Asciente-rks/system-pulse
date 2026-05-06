@@ -15,12 +15,6 @@ type DevAccount = {
 
 const DEV_ACCOUNTS: DevAccount[] = [
   {
-    label: "Super Admin",
-    email: "superadmin@example.local",
-    password: "Password123!",
-    role: "superadmin",
-  },
-  {
     label: "Admin",
     email: "admin@example.local",
     password: "Password123!",

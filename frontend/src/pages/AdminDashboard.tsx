@@ -26,6 +26,10 @@ type AdminTab = "overview" | "systems" | "users";
 
 const USERS_PER_PAGE = 5;
 
+const DELETION_DISABLED = true;
+const DELETION_DISABLED_NOTE =
+  "Admin deletion is temporarily restricted while we test other parts of the system.";
+
 export default function AdminDashboard() {
   const { user } = useAuth();
 
@@ -568,7 +572,13 @@ export default function AdminDashboard() {
                     </button>
                     <button
                       className="btn btn-danger system-action-btn"
-                      onClick={() => setDeleteSystemTarget(system)}
+                      onClick={() =>
+                        !DELETION_DISABLED && setDeleteSystemTarget(system)
+                      }
+                      disabled={DELETION_DISABLED}
+                      title={
+                        DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                      }
                     >
                       Delete
                     </button>
@@ -769,6 +779,12 @@ export default function AdminDashboard() {
                 password.
               </p>
 
+              {DELETION_DISABLED && (
+                <p className="deletion-locked-note" role="status">
+                  🔒 {DELETION_DISABLED_NOTE}
+                </p>
+              )}
+
               <div className="modal-form-grid modal-danger-grid">
                 <div className="form-field">
                   <label className="field-label">Type DELETE</label>
@@ -778,6 +794,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setUserDeleteConfirm(event.target.value)
                     }
+                    disabled={DELETION_DISABLED}
                   />
                 </div>
 
@@ -790,6 +807,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setUserDeletePassword(event.target.value)
                     }
+                    disabled={DELETION_DISABLED}
                   />
                 </div>
               </div>
@@ -797,7 +815,10 @@ export default function AdminDashboard() {
               <button
                 className="btn btn-danger"
                 onClick={handleDeleteUser}
-                disabled={busy === "delete-user"}
+                disabled={DELETION_DISABLED || busy === "delete-user"}
+                title={
+                  DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                }
               >
                 {busy === "delete-user" ? "Deleting..." : "Delete User"}
               </button>
@@ -815,12 +836,19 @@ export default function AdminDashboard() {
               access mappings.
             </p>
 
+            {DELETION_DISABLED && (
+              <p className="deletion-locked-note" role="status">
+                🔒 {DELETION_DISABLED_NOTE}
+              </p>
+            )}
+
             <div className="form-field">
               <label className="field-label">Type DELETE</label>
               <input
                 className="field-input"
                 value={systemDeleteConfirm}
                 onChange={(event) => setSystemDeleteConfirm(event.target.value)}
+                disabled={DELETION_DISABLED}
               />
             </div>
 
@@ -833,6 +861,7 @@ export default function AdminDashboard() {
                 onChange={(event) =>
                   setSystemDeletePassword(event.target.value)
                 }
+                disabled={DELETION_DISABLED}
               />
             </div>
 
@@ -840,7 +869,10 @@ export default function AdminDashboard() {
               <button
                 className="btn btn-danger"
                 onClick={handleDeleteSystem}
-                disabled={busy === "delete-system"}
+                disabled={DELETION_DISABLED || busy === "delete-system"}
+                title={
+                  DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                }
               >
                 {busy === "delete-system" ? "Deleting..." : "Delete System"}
               </button>
