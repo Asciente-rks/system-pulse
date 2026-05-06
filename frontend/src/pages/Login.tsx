@@ -6,6 +6,34 @@ import { useTheme } from "../hooks/useTheme";
 import logoDark from "../../assets/With_Name_Dark.png";
 import logoLight from "../../assets/With_Name_Light.png";
 
+type DevAccount = {
+  label: string;
+  email: string;
+  password: string;
+  role: string;
+};
+
+const DEV_ACCOUNTS: DevAccount[] = [
+  {
+    label: "Super Admin",
+    email: "superadmin@example.local",
+    password: "Password123!",
+    role: "superadmin",
+  },
+  {
+    label: "Admin",
+    email: "admin@example.local",
+    password: "Password123!",
+    role: "admin",
+  },
+  {
+    label: "Tester",
+    email: "tester@example.local",
+    password: "Password123!",
+    role: "tester",
+  },
+];
+
 export default function Login() {
   const navigate = useNavigate();
   const { user, signIn } = useAuth();
@@ -15,6 +43,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [devOpen, setDevOpen] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -29,13 +58,25 @@ export default function Login() {
     navigate("/admin", { replace: true });
   }, [navigate, user]);
 
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function performLogin(
+    candidateEmail: string,
+    candidatePassword: string,
+  ): Promise<void> {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await login(email, password);
+      const response = await login(candidateEmail, candidatePassword);
+
+      if (response._httpStatus === 429) {
+        setError("Too many login attempts. Please wait a moment.");
+        return;
+      }
+
+      if (response._httpStatus === 401) {
+        setError("Invalid email or password.");
+        return;
+      }
 
       if (response._httpStatus !== 200 || !response.data) {
         setError(response.message || "Login failed");
@@ -52,6 +93,18 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    await performLogin(email, password);
+  }
+
+  function handleDevPick(account: DevAccount) {
+    setEmail(account.email);
+    setPassword(account.password);
+    setDevOpen(false);
+    void performLogin(account.email, account.password);
   }
 
   return (
@@ -110,6 +163,64 @@ export default function Login() {
           <Link to="/forgot-password">Forgot password?</Link>
         </p>
       </form>
+
+      <button
+        type="button"
+        className="dev-quick-btn"
+        onClick={() => setDevOpen((value) => !value)}
+        title="Dev Tools"
+        aria-label="Dev Tools"
+      >
+        <span className="dev-quick-icon">⚙</span>
+        <span>Dev Tools</span>
+      </button>
+
+      {devOpen && (
+        <div
+          className="dev-quick-popover"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Dev Tools"
+        >
+          <button
+            type="button"
+            className="dev-quick-close"
+            onClick={() => setDevOpen(false)}
+            aria-label="Close Dev Tools"
+          >
+            ✕
+          </button>
+          <div className="dev-quick-header">
+            <h3 className="dev-quick-title">Dev Tools</h3>
+            <span className="dev-quick-tag">demo</span>
+          </div>
+          <p className="dev-quick-help">
+            Quick-login as a seeded account so portfolio reviewers don't have
+            to type anything.
+          </p>
+          <div className="dev-quick-list">
+            {DEV_ACCOUNTS.map((account) => (
+              <button
+                key={account.email}
+                type="button"
+                className="dev-quick-option"
+                disabled={loading}
+                onClick={() => handleDevPick(account)}
+              >
+                <span className="dev-quick-role">{account.label}</span>
+                <code className="dev-quick-email">{account.email}</code>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {devOpen && (
+        <div
+          className="dev-quick-backdrop"
+          onClick={() => setDevOpen(false)}
+        />
+      )}
     </section>
   );
 }

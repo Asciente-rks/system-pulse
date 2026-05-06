@@ -1026,3 +1026,170 @@ select.field-input {
     grid-template-columns: 1fr;
   }
 }
+
+.dev-quick-btn {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 999px;
+  padding: 10px 18px;
+  background: var(--panel);
+  color: var(--accent-strong);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  backdrop-filter: blur(14px);
+  z-index: 999;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.dev-quick-btn:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--panel) 85%, var(--accent) 8%);
+}
+
+.dev-quick-btn:active {
+  transform: translateY(0);
+}
+
+.dev-quick-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.dev-quick-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 998;
+}
+
+.dev-quick-popover {
+  position: fixed;
+  bottom: 84px;
+  right: 24px;
+  width: 300px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  z-index: 1000;
+}
+
+.dev-quick-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding-right: 28px;
+}
+
+.dev-quick-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
+.dev-quick-tag {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.dev-quick-help {
+  margin: 0 0 12px 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.dev-quick-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: background 0.2s ease;
+}
+
+.dev-quick-close:hover {
+  background: color-mix(in srgb, var(--line) 60%, transparent);
+}
+
+.dev-quick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dev-quick-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--ink);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.dev-quick-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--bg-soft) 80%, var(--accent) 12%);
+  transform: translateY(-1px);
+}
+
+.dev-quick-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dev-quick-role {
+  font-weight: 700;
+  color: var(--accent-strong);
+  letter-spacing: 0.03em;
+}
+
+.dev-quick-email {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  color: var(--muted);
+}

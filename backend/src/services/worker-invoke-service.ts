@@ -16,7 +16,6 @@ export const invokeHealthWorker = async (
     );
   }
 
-  // Reuse the existing SQS worker handler contract with a synthetic single-record event.
   const payload = {
     Records: [
       {

@@ -41,7 +41,7 @@ export const resolveFrontendBaseUrl = (
         return fromReferer;
       }
     } catch {
-      // Ignore invalid referer values and use fallback.
+
     }
   }
 

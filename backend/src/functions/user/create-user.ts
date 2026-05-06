@@ -1,8 +1,8 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { parse } from "../../utils/parse.js";
 import { handleError, headers } from "../../utils/error-handler.js";
-import { createUserSchema } from "../../validation/user-validation.js"; // You'll need this!
-import { docClient } from "../../config/db.js"; // Use the shared connection
+import { createUserSchema } from "../../validation/user-validation.js";
+import { docClient } from "../../config/db.js";
 import { createUserService } from "../../services/user-service.js";
 import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
 import type { CreateUserInput } from "../../types/user.js";
@@ -109,6 +109,6 @@ export const createUserInvitation = async (
     };
   } catch (error) {
     console.error("Error creating user:", error);
-    return handleError(error); // Uses the shared error handler
+    return handleError(error);
   }
 };

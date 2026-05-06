@@ -316,6 +316,25 @@ System Pulse is **invite-only** — no public signup. The first user is created 
 2. Receive a reset link with `?token=...`.
 3. Set new password (token expires in `PASSWORD_RESET_ELIGIBILITY_MINUTES`, default 30).
 
+### Dev Tools quick-login
+
+The login page ships with a floating **⚙ Dev Tools** button in the bottom-right corner. Click it to one-shot sign in as Super Admin / Admin / Tester using the seeded credentials — handy for portfolio reviewers who don't want to type anything. The button still goes through the rate-limited `/auth/login` endpoint; it just skips the typing.
+
+---
+
+## Hardening
+
+Because the live demo is reachable by anyone on the public internet, the API and frontend ship a few defenses:
+
+- **Per-IP login rate limiting** — `backend/src/utils/rate-limit.ts` keeps a DynamoDB-backed bucket per `(IP, actor, time-window)` tuple. `/auth/login` is capped at 10 attempts per 60-second window. Hitting the limit returns `429` with a generic "Too many requests" message. State is persistent across Lambda containers because it lives in DynamoDB (with a TTL that auto-evicts old buckets).
+- **Hardened security headers on every response** (set in `backend/src/utils/error-handler.ts`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Cross-Origin-Resource-Policy: cross-origin`, plus a generic `Server: SystemPulse` header to mask the runtime fingerprint.
+- **Generic 500s** — the global error handler no longer leaks `error.message` or stack traces; clients always see `{ status: 500, message: "Internal server error" }`.
+- **Frontend bundle hardening** — `frontend/src/utils/security.ts` runs at boot in production builds:
+  - Replaces every `console.*` method with a no-op and clears the console every 1.5s, so opening DevTools shows nothing useful.
+  - Disables the React DevTools global hook so the React component tree isn't browsable.
+  - **Does NOT block F12, right-click, or `Ctrl+Shift+I`** — the dev tools panel itself stays open-able. The defenses are about making what's inside opaque, not about pretending the user can't open it.
+- **Vite production build** — `vite.config.ts` drops every `console.*` call and `debugger` statement from the bundle, disables source maps, and rewrites entry / chunk / asset filenames as content hashes. Combined with esbuild's name mangling, the deployed JS reads as a wall of single-letter identifiers in DevTools.
+
 ---
 
 ## Deployment
