@@ -3,7 +3,7 @@ import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
-import { canInviteRole } from "../../utils/rbac.js";
+import { isSuperAdmin } from "../../utils/rbac.js";
 import {
   getActorUserId,
   requireAdminActorPassword,
@@ -54,6 +54,21 @@ export const deleteUser = async (
       actorPassword,
     );
 
+    // User-deletion is locked to superadmin. Plain admins still pass the
+    // requireAdminActorPassword gate above (other admin endpoints rely on
+    // it), so we re-check here. Without this, an admin could call DELETE
+    // /users/<tester-id> and succeed via canInviteRole — we explicitly do
+    // not want that.
+    if (!isSuperAdmin(actor.role as any)) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          message: "forbidden - only superadmin may delete users",
+        }),
+      };
+    }
+
     if (actor.id === targetUserId) {
       return {
         statusCode: 400,
@@ -76,14 +91,6 @@ export const deleteUser = async (
         statusCode: 404,
         headers,
         body: JSON.stringify({ message: "user not found" }),
-      };
-    }
-
-    if (!canInviteRole(actor.role as any, target.role as any)) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({ message: "forbidden - out of role scope" }),
       };
     }
 

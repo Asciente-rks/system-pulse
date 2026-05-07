@@ -26,12 +26,20 @@ type AdminTab = "overview" | "systems" | "users";
 
 const USERS_PER_PAGE = 5;
 
-const DELETION_DISABLED = true;
+// Copy shown to admins explaining why their delete buttons are locked.
+// (Superadmins never see this — their deletion buttons are unlocked.)
 const DELETION_DISABLED_NOTE =
-  "Admin deletion is temporarily restricted while we test other parts of the system.";
+  "Only the super admin can delete users or systems.";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
+
+  // Role-aware delete gate. Plain admins still see the dashboard but their
+  // delete controls remain disabled — same UX as before, just no longer
+  // applied to superadmins. The backend (delete-user / delete-system)
+  // enforces the same rule independently, so flipping this flag client-
+  // side wouldn't grant a malicious admin actual delete capability.
+  const DELETION_DISABLED = user?.role !== "superadmin";
 
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [users, setUsers] = useState<SessionUser[]>([]);

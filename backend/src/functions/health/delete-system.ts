@@ -8,6 +8,7 @@ import {
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
+import { isSuperAdmin } from "../../utils/rbac.js";
 import {
   getActorUserId,
   requireAdminActorPassword,
@@ -54,12 +55,25 @@ export const deleteSystem = async (
     }
 
     const actorUserId = getActorUserId(event);
-    await requireAdminActorPassword(
+    const actor = await requireAdminActorPassword(
       docClient,
       usersTable,
       actorUserId,
       actorPassword,
     );
+
+    // System-deletion is locked to superadmin. Plain admins are admins for
+    // the rest of the surface (invite/manage testers, trigger health) but
+    // explicitly NOT for destroying registered systems.
+    if (!isSuperAdmin(actor.role as any)) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          message: "forbidden - only superadmin may delete systems",
+        }),
+      };
+    }
 
     const systemResponse = await docClient.send(
       new GetCommand({
