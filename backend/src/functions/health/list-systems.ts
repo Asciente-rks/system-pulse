@@ -5,6 +5,7 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
 import { resolveDeploymentMode } from "../../utils/health-workflow.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
 
 type HealthSystemRecord = {
   id: string;
@@ -40,6 +41,15 @@ export const listSystems = async (
         body: JSON.stringify({ message: "SYSTEM_PULSE_TABLE not set" }),
       };
     }
+
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "systems-list",
+      limit: 60,
+      windowSeconds: 60,
+    });
 
     const inviterRole =
       (event.headers &&

@@ -5,6 +5,9 @@ import { setupPasswordSchema } from "../../validation/user-validation.js";
 import { docClient } from "../../config/db.js";
 import { QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { hashPassword } from "../../utils/password.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
+
+const MAX_INVITE_TOKEN_LEN = 128;
 
 export const acceptUserInvitation = async (
   event: APIGatewayProxyEvent,
@@ -18,6 +21,15 @@ export const acceptUserInvitation = async (
         body: JSON.stringify({ message: "USERS_TABLE not set" }),
       };
 
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "users-accept-invite",
+      limit: 10,
+      windowSeconds: 60,
+    });
+
     const body = parse(event.body) as Record<string, unknown>;
     const token =
       (body && (body.token as string)) || event.queryStringParameters?.token;
@@ -26,6 +38,14 @@ export const acceptUserInvitation = async (
         statusCode: 400,
         headers,
         body: JSON.stringify({ message: "invite token is required" }),
+      };
+    }
+
+    if (typeof token !== "string" || token.length > MAX_INVITE_TOKEN_LEN) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ message: "invite token is malformed" }),
       };
     }
 

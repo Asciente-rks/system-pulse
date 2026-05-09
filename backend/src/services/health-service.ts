@@ -8,6 +8,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { HealthCheck, CreateHealthInput } from "../types/health.js";
 import { resolveDeploymentMode } from "../utils/health-workflow.js";
+import { urlSafetyError } from "../utils/url-safety.js";
 
 const SYSTEMS_PK = "SYSTEM";
 const SK_PREFIX_SYSTEM = "SYS#";
@@ -157,6 +158,24 @@ export const createHealthService = (
     const attempt = options?.attempt ?? 1;
     const triggerSource = options?.triggerSource ?? "manual";
     const persist = options?.persist ?? true;
+
+    // Defense-in-depth SSRF guard. Even though `createHealthSchema`
+    // rejects unsafe URLs at create time, legacy systems that pre-date
+    // this guard could still be in storage. Recheck on every probe.
+    const safetyError = urlSafetyError(url);
+    if (safetyError) {
+      const now = new Date().toISOString();
+      const blockedResult: HealthProbeResult = {
+        status: "DOWN",
+        lastChecked: now,
+        errorMessage: `Refused to probe: ${safetyError}`,
+      };
+      if (persist) {
+        await persistHealthProbeResult(docClient, tableName, id, blockedResult);
+        await persistHealthLog(id, blockedResult, attempt, triggerSource);
+      }
+      return blockedResult;
+    }
 
     const trimmed = url.replace(/\/+$/g, "");
     const candidates = [`${trimmed}/health`, trimmed];

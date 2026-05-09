@@ -44,8 +44,15 @@ export const emailYup = yup
     typeof value === "string" ? value.trim().toLowerCase() : value,
   );
 
+// Trim leading/trailing whitespace and collapse consecutive spaces so
+// the persisted value can't be padded with hidden whitespace
+// (defense against display spoofing and DDB/email rendering quirks).
+const collapseWhitespace = (value: unknown): unknown =>
+  typeof value === "string" ? value.trim().replace(/\s+/g, " ") : value;
+
 export const fullNameYup = yup
   .string()
+  .transform(collapseWhitespace)
   .required("Full name is required")
   .min(3, "Name too short")
   .max(80, "Name too long")
@@ -56,6 +63,7 @@ export const fullNameYup = yup
 
 export const orgNameYup = yup
   .string()
+  .transform(collapseWhitespace)
   .required("Organization name is required")
   .min(2, "Organization name too short")
   .max(60, "Organization name too long")
@@ -100,7 +108,13 @@ export const updateUserSchema = yup.object({
 
 export const loginSchema = yup.object({
   email: emailYup,
-  password: yup.string().required("Password is required"),
+  // Bounded so a malicious actor can't make us run scrypt over a
+  // multi-MB string. The cap is well above the practical limit
+  // imposed by `passwordYup` (128 chars) at the create side.
+  password: yup
+    .string()
+    .required("Password is required")
+    .max(256, "Password is too long"),
 });
 
 export const forgotPasswordSchema = yup.object({
@@ -108,7 +122,12 @@ export const forgotPasswordSchema = yup.object({
 });
 
 export const resetPasswordSchema = yup.object({
-  token: yup.string().required("Reset token is required"),
+  // Reset tokens are server-issued UUIDs; cap to keep DDB queries
+  // fast and prevent abuse.
+  token: yup
+    .string()
+    .required("Reset token is required")
+    .max(128, "Reset token is too long"),
   password: passwordYup,
   confirmPassword: yup
     .string()

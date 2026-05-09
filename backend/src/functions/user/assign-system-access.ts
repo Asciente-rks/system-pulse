@@ -72,6 +72,30 @@ export const assignSystemAccess = async (
       };
     }
 
+    // Cap the array so a malicious admin can't blow up the user
+    // record. 500 systems per user is comfortably above any
+    // realistic org size.
+    if (systemIds.length > 500) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ message: "systemIds may contain at most 500 ids" }),
+      };
+    }
+
+    // Validate every id is a non-empty string of reasonable length.
+    if (
+      !systemIds.every(
+        (id) => typeof id === "string" && id.length > 0 && id.length < 200,
+      )
+    ) {
+      return {
+        statusCode: 400,
+        headers,
+        body: JSON.stringify({ message: "systemIds must be non-empty short strings" }),
+      };
+    }
+
     if (
       requestedStatus &&
       !USER_STATUSES.includes(requestedStatus as (typeof USER_STATUSES)[number])

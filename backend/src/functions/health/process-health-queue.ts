@@ -2,6 +2,7 @@ import type { SQSBatchResponse, SQSHandler, SQSRecord } from "aws-lambda";
 import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import { publishHealthStatusEvent } from "../../services/notification-service.js";
+import { enqueueHealthCheck } from "../../services/queue-service.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
 import { shouldUseRenderWakeupWorkflow } from "../../utils/health-workflow.js";
 
@@ -13,24 +14,84 @@ const sleep = async (delayMs: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, delayMs));
 };
 
+// Hard caps on the queue message shape. SQS messages always come
+// from our own producers (this codebase) so trust is high, but
+// validating here means a malformed message can never cause an
+// unbounded loop or oversized DDB write — it lands in the DLQ
+// after maxReceiveCount.
+const MAX_SYSTEM_ID_LEN = 200;
+const MAX_REQUESTED_BY_LEN = 200;
+const MAX_ATTEMPT = 10;
+
 const parseQueueMessage = (record: SQSRecord): HealthCheckQueueMessage => {
   const parsed = JSON.parse(record.body) as Partial<HealthCheckQueueMessage>;
 
-  if (!parsed.systemId || typeof parsed.systemId !== "string") {
-    throw new Error("Invalid queue payload: systemId is required");
+  if (
+    !parsed.systemId ||
+    typeof parsed.systemId !== "string" ||
+    parsed.systemId.length > MAX_SYSTEM_ID_LEN
+  ) {
+    throw new Error("Invalid queue payload: systemId is required and must be reasonable length");
   }
 
-  const attempt =
-    typeof parsed.attempt === "number" && parsed.attempt > 0
-      ? parsed.attempt
-      : 1;
+  let attempt = 1;
+  if (typeof parsed.attempt === "number" && parsed.attempt > 0) {
+    attempt = Math.min(parsed.attempt, MAX_ATTEMPT);
+  }
+
+  let requestedBy: string | undefined;
+  if (
+    typeof parsed.requestedBy === "string" &&
+    parsed.requestedBy.length > 0 &&
+    parsed.requestedBy.length <= MAX_REQUESTED_BY_LEN
+  ) {
+    requestedBy = parsed.requestedBy;
+  }
+
+  let requestedAt: string;
+  if (
+    typeof parsed.requestedAt === "string" &&
+    parsed.requestedAt.length > 0 &&
+    parsed.requestedAt.length <= 64
+  ) {
+    requestedAt = parsed.requestedAt;
+  } else {
+    requestedAt = new Date().toISOString();
+  }
 
   return {
     systemId: parsed.systemId,
     attempt,
-    requestedAt: parsed.requestedAt || new Date().toISOString(),
-    requestedBy: parsed.requestedBy,
+    requestedAt,
+    requestedBy,
   };
+};
+
+/**
+ * Render-wakeup recheck strategy.
+ *
+ * Original behaviour: this Lambda did `await sleep(90s)` then
+ * recheck — billed for the full 90 seconds while idle.
+ *
+ * Optimised behaviour: re-enqueue with `DelaySeconds` so the Lambda
+ * exits cleanly and a fresh invocation picks the recheck up. Total
+ * billed compute drops from ~95s to ~10s per Render-system probe.
+ *
+ * Gates:
+ *   - `HEALTH_RECHECK_VIA_SQS=false`  → force sleep fallback
+ *   - `HEALTH_CHECK_QUEUE_URL` unset  → no queue, sleep fallback
+ *   - `ENABLE_QUEUE_WORKER_MAPPING=true` → queue → worker mapping
+ *      is wired, so re-enqueued messages will actually run. Without
+ *      this, the recheck would land in the queue and never execute.
+ */
+const SHOULD_RECHECK_VIA_SQS = (): boolean => {
+  if (process.env.HEALTH_RECHECK_VIA_SQS === "false") return false;
+  if (!process.env.HEALTH_CHECK_QUEUE_URL) return false;
+  // Without the event source mapping, re-enqueued messages never get
+  // processed. Fall back to in-Lambda sleep instead of silently
+  // black-holing the recheck.
+  if (process.env.ENABLE_QUEUE_WORKER_MAPPING !== "true") return false;
+  return true;
 };
 
 export const processHealthCheckQueue: SQSHandler = async (
@@ -96,6 +157,30 @@ export const processHealthCheckQueue: SQSHandler = async (
           continue;
         }
 
+        if (SHOULD_RECHECK_VIA_SQS()) {
+          // Re-enqueue with the wake-up delay; this Lambda exits cleanly.
+          // SQS DelaySeconds maxes at 900s, our default is 90s.
+          try {
+            await enqueueHealthCheck(
+              {
+                systemId: system.id,
+                attempt: 2,
+                requestedAt: new Date().toISOString(),
+                requestedBy: message.requestedBy,
+              },
+              Math.min(900, Math.max(0, wakeupDelaySeconds)),
+            );
+            continue;
+          } catch (enqueueError) {
+            console.warn(
+              "Render-wakeup re-enqueue failed; falling back to in-Lambda sleep",
+              enqueueError,
+            );
+            // fall through to legacy sleep path
+          }
+        }
+
+        // Legacy / fallback path: sleep + recheck inside this Lambda.
         await sleep(wakeupDelaySeconds * 1000);
 
         const wakeupResult = await healthService.runHealthCheck(

@@ -75,8 +75,15 @@ export const registerStart = async (
       String(item.SK || "").startsWith("USER#"),
     );
 
+    const otpTtlMinutes = Math.max(
+      2,
+      Number(process.env.REGISTER_OTP_TTL_MINUTES || OTP_DEFAULT_TTL_MINUTES),
+    );
+
     if (matchingUsers.length > 0) {
-      // Generic message — don't help enumeration but stop the flow.
+      // Generic response — same shape and content as the success
+      // path so the caller can't distinguish "email already taken"
+      // from "code sent" via response inspection.
       return {
         statusCode: 200,
         headers,
@@ -84,6 +91,10 @@ export const registerStart = async (
           status: 200,
           message:
             "If this email is available, a verification code has been sent.",
+          data: {
+            email: validated.email,
+            expiresInMinutes: otpTtlMinutes,
+          },
         }),
       };
     }
@@ -106,11 +117,6 @@ export const registerStart = async (
         };
       }
     }
-
-    const otpTtlMinutes = Math.max(
-      2,
-      Number(process.env.REGISTER_OTP_TTL_MINUTES || OTP_DEFAULT_TTL_MINUTES),
-    );
 
     const otp = generateNumericOtp(6);
     const otpHash = hashOtp(otp);

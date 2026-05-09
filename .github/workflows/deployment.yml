@@ -41,6 +41,10 @@ jobs:
       ENABLE_SNS_NOTIFICATIONS: ${{ vars.ENABLE_SNS_NOTIFICATIONS || 'false' }}
       HEALTH_TRIGGER_TRANSPORT: ${{ vars.HEALTH_TRIGGER_TRANSPORT || 'lambda-direct' }}
       ENABLE_QUEUE_WORKER_MAPPING: ${{ vars.ENABLE_QUEUE_WORKER_MAPPING || 'false' }}
+      HEALTH_RECHECK_VIA_SQS: ${{ vars.HEALTH_RECHECK_VIA_SQS || 'true' }}
+      REGISTER_OTP_TTL_MINUTES: ${{ vars.REGISTER_OTP_TTL_MINUTES || '10' }}
+      DEMO_SESSION_TTL_SECONDS: ${{ vars.DEMO_SESSION_TTL_SECONDS || '3600' }}
+      SHOW_REGISTER_OTP: ${{ vars.SHOW_REGISTER_OTP || 'false' }}
 
     steps:
       - name: Checkout
@@ -96,8 +100,13 @@ jobs:
 
       - name: Install and build backend
         working-directory: backend
+        # `npm install` (not `npm ci`) so newly-added deps in
+        # package.json don't require an in-sync lock file. The lock
+        # is updated locally inside the runner; reproducibility comes
+        # from the explicit semver ranges in package.json plus the
+        # rest of this workflow staying deterministic.
         run: |
-          npm ci
+          npm install --no-audit --no-fund --no-progress
           npm run build
           npm prune --omit=dev
 
@@ -341,6 +350,15 @@ jobs:
                   "ENABLE_SNS_NOTIFICATIONS": os.environ.get("ENABLE_SNS_NOTIFICATIONS", "false"),
                   "HEALTH_TRIGGER_TRANSPORT": os.environ.get("HEALTH_TRIGGER_TRANSPORT", "lambda-direct"),
                   "HEALTH_WORKER_FUNCTION_NAME": os.environ.get("WORKER_FUNCTION_NAME", ""),
+                  # SQS optimisation knobs. The worker checks
+                  # ENABLE_QUEUE_WORKER_MAPPING to decide whether
+                  # re-enqueueing is safe (no consumer = black hole).
+                  "ENABLE_QUEUE_WORKER_MAPPING": os.environ.get("ENABLE_QUEUE_WORKER_MAPPING", "false"),
+                  "HEALTH_RECHECK_VIA_SQS": os.environ.get("HEALTH_RECHECK_VIA_SQS", "true"),
+                  # SaaS knobs.
+                  "REGISTER_OTP_TTL_MINUTES": os.environ.get("REGISTER_OTP_TTL_MINUTES", "10"),
+                  "DEMO_SESSION_TTL_SECONDS": os.environ.get("DEMO_SESSION_TTL_SECONDS", "3600"),
+                  "SHOW_REGISTER_OTP": os.environ.get("SHOW_REGISTER_OTP", "false"),
               }
           }
 

@@ -8,6 +8,7 @@ import {
   isSuperAdmin,
 } from "../../utils/rbac.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
+import { enforceRateLimit } from "../../utils/rate-limit.js";
 
 const effectiveOrgId = (orgId?: unknown): string =>
   typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
@@ -25,6 +26,15 @@ export const listUsers = async (
         body: JSON.stringify({ message: "USERS_TABLE not set" }),
       };
     }
+
+    await enforceRateLimit({
+      docClient,
+      tableName,
+      event,
+      key: "users-list",
+      limit: 60,
+      windowSeconds: 60,
+    });
 
     const inviterRole =
       (event.headers &&
