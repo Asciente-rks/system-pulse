@@ -26,3 +26,4 @@ export { updateMyName } from "./functions/me/update-name.js";
 export { updateMyEmailStart } from "./functions/me/update-email-start.js";
 export { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
 export { updateOrg } from "./functions/org/update-org.js";
+export { listOrgs } from "./functions/org/list-orgs.js";

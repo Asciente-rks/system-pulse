@@ -500,6 +500,28 @@ export async function updateOrg(payload: { orgId: string; name: string }) {
   );
 }
 
+export interface OrgSummary {
+  id: string;
+  name: string;
+  slug?: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  ownerName?: string;
+  isDemo?: boolean;
+  createDate?: string;
+  memberCount: number;
+  systemCount: number;
+}
+
+export async function listOrgs() {
+  return request<{
+    data?: { orgs: OrgSummary[]; count: number };
+    message?: string;
+  }>("/orgs", {
+    method: "GET",
+  });
+}
+
 // ---- Account lock ----
 
 export async function unlockUser(payload: {

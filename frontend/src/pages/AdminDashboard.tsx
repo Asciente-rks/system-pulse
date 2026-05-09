@@ -8,6 +8,7 @@ import {
   getSystemLogs,
   getUser,
   inviteUser,
+  listOrgs,
   listSystems,
   listUsers,
   PERMISSION_KEYS,
@@ -17,6 +18,7 @@ import {
   updateSystem,
   updateUserPermissions,
   type AuthRole,
+  type OrgSummary,
   type SessionUser,
   type SystemSummary,
   type UserPermissions,
@@ -29,7 +31,7 @@ import {
   statusPillClassName,
 } from "../utils/health-status";
 
-type AdminTab = "overview" | "systems" | "users";
+type AdminTab = "overview" | "systems" | "users" | "platform";
 
 const USERS_PER_PAGE = 5;
 const POLL_INTERVAL_MS = 10_000;
@@ -48,6 +50,7 @@ type UserModalTab = "access" | "permissions";
 
 export default function AdminDashboard() {
   const { user, isDemo, isOwner, can } = useAuth();
+  const isSuperAdmin = user?.role === "superadmin";
 
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [users, setUsers] = useState<SessionUser[]>([]);
@@ -64,6 +67,10 @@ export default function AdminDashboard() {
   // Unlock modal
   const [unlockTarget, setUnlockTarget] = useState<SessionUser | null>(null);
   const [unlockPassword, setUnlockPassword] = useState("");
+
+  // Platform tab (superadmin)
+  const [platformOrgs, setPlatformOrgs] = useState<OrgSummary[]>([]);
+  const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
 
   // Create system form
   const [systemName, setSystemName] = useState("");
@@ -493,6 +500,58 @@ export default function AdminDashboard() {
     }
   }
 
+  async function loadPlatform() {
+    if (!isSuperAdmin) return;
+    setBusy("platform-load");
+    setErrorMessage(null);
+    try {
+      const response = await listOrgs();
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Failed to load organizations"),
+        );
+        return;
+      }
+      setPlatformOrgs(response.data?.orgs || []);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Lazy-load the Platform tab the first time the superadmin opens it.
+  useEffect(() => {
+    if (activeTab === "platform" && isSuperAdmin && platformOrgs.length === 0) {
+      void loadPlatform();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, isSuperAdmin]);
+
+  async function handleSuspendToggle(target: SessionUser) {
+    const next = target.status_ === "Suspended" ? "Active" : "Suspended";
+    setBusy(`suspend-${target.id}`);
+    setErrorMessage(null);
+    try {
+      const response = await updateUserPermissions({
+        userId: target.id,
+        status_: next,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not change status"),
+        );
+        return;
+      }
+      setStatusMessage(
+        next === "Suspended"
+          ? `${target.full_name} suspended`
+          : `${target.full_name} reactivated`,
+      );
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleUnlockSubmit() {
     if (!unlockTarget) return;
     if (!unlockPassword) {
@@ -653,6 +712,15 @@ export default function AdminDashboard() {
           >
             Users
           </button>
+          {isSuperAdmin && (
+            <button
+              className={`tab-pill ${activeTab === "platform" ? "active" : ""}`}
+              onClick={() => setActiveTab("platform")}
+              title="Cross-org view (superadmin only)"
+            >
+              Platform
+            </button>
+          )}
         </div>
 
         {statusMessage && <p className="status-note">{statusMessage}</p>}
@@ -748,6 +816,17 @@ export default function AdminDashboard() {
               Your account doesn't have the canCreateSystem permission. Ask an
               owner to grant it.
             </p>
+          )}
+
+          {systems.length === 0 && (
+            <div className="empty-state">
+              <p className="empty-state-title">No systems registered yet</p>
+              <p className="panel-copy compact-copy">
+                {canCreateSystem
+                  ? "Add your first production URL above. We'll start probing it once it's saved."
+                  : "Ask an owner to add the first system. You'll see them here once they're registered."}
+              </p>
+            </div>
           )}
 
           <div className="grid-cards">
@@ -954,6 +1033,31 @@ export default function AdminDashboard() {
                               Unlock
                             </button>
                           )}
+                          {canUpdateUserPerm &&
+                            entry.id !== user?.id &&
+                            entry.role !== "owner" &&
+                            entry.role !== "superadmin" && (
+                              <button
+                                className={`btn ${
+                                  entry.status_ === "Suspended"
+                                    ? "btn-success"
+                                    : "btn-warning"
+                                }`}
+                                onClick={() => handleSuspendToggle(entry)}
+                                disabled={busy === `suspend-${entry.id}`}
+                                title={
+                                  entry.status_ === "Suspended"
+                                    ? "Reactivate this account"
+                                    : "Suspend this account"
+                                }
+                              >
+                                {busy === `suspend-${entry.id}`
+                                  ? "..."
+                                  : entry.status_ === "Suspended"
+                                    ? "Activate"
+                                    : "Suspend"}
+                              </button>
+                            )}
                           <button
                             className="btn btn-surface"
                             onClick={() => openUserSettings(entry)}
@@ -998,6 +1102,162 @@ export default function AdminDashboard() {
               Next
             </button>
           </div>
+        </section>
+      )}
+
+      {activeTab === "platform" && isSuperAdmin && (
+        <section className="panel">
+          <div className="modal-head">
+            <div>
+              <h3 className="panel-subtitle">Platform · Organizations</h3>
+              <p className="panel-copy compact-copy">
+                Cross-org view. You can drill into each org's members
+                and delete accounts, but you can't read their personal
+                details (passwords, system access lists).
+              </p>
+            </div>
+            <button
+              className="btn btn-muted"
+              onClick={loadPlatform}
+              disabled={busy === "platform-load"}
+            >
+              {busy === "platform-load" ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          {platformOrgs.length === 0 ? (
+            <p className="panel-copy compact-copy">
+              No organizations to show yet.
+            </p>
+          ) : (
+            <div className="grid-cards">
+              {platformOrgs.map((org) => {
+                const expanded = expandedOrgId === org.id;
+                const orgUsers = users.filter((u) => u.orgId === org.id);
+                return (
+                  <article key={org.id} className="system-card platform-card">
+                    <div>
+                      <div className="platform-card-head">
+                        <p className="system-title">
+                          {org.name}
+                          {org.isDemo && (
+                            <span className="role-pill role-locked" style={{ marginLeft: 8 }}>
+                              DEMO
+                            </span>
+                          )}
+                        </p>
+                        <p className="panel-copy compact-copy">
+                          {org.ownerName ? (
+                            <>
+                              Owner: <strong>{org.ownerName}</strong>
+                              {org.ownerEmail && (
+                                <> · {org.ownerEmail}</>
+                              )}
+                            </>
+                          ) : (
+                            <>Owner: (unknown)</>
+                          )}
+                        </p>
+                      </div>
+                      <div className="platform-stats">
+                        <span>
+                          <strong>{org.memberCount}</strong> members
+                        </span>
+                        <span>
+                          <strong>{org.systemCount}</strong> systems
+                        </span>
+                        {org.createDate && (
+                          <span style={{ opacity: 0.7 }}>
+                            Created{" "}
+                            {new Date(org.createDate).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="button-row" style={{ gap: 8 }}>
+                      <button
+                        className="btn btn-info"
+                        onClick={() =>
+                          setExpandedOrgId(expanded ? null : org.id)
+                        }
+                      >
+                        {expanded
+                          ? "Hide members"
+                          : `View members (${orgUsers.length})`}
+                      </button>
+                    </div>
+
+                    {expanded && (
+                      <div
+                        className="table-wrap"
+                        style={{ marginTop: 12 }}
+                      >
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th>Name</th>
+                              <th>Email</th>
+                              <th>Role</th>
+                              <th>Status</th>
+                              <th>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {orgUsers.map((entry) => {
+                              const locked = Boolean(entry.lockedAt);
+                              return (
+                                <tr key={entry.id}>
+                                  <td>{entry.full_name}</td>
+                                  <td>{entry.email}</td>
+                                  <td>
+                                    <span
+                                      className={`role-pill role-${entry.role}`}
+                                    >
+                                      {entry.role}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    {locked ? (
+                                      <span className="role-pill role-locked">
+                                        🔒 Locked
+                                      </span>
+                                    ) : (
+                                      entry.status_
+                                    )}
+                                  </td>
+                                  <td>
+                                    <div
+                                      className="button-row"
+                                      style={{ gap: 6 }}
+                                    >
+                                      <button
+                                        className="btn btn-surface"
+                                        onClick={() => openUserSettings(entry)}
+                                      >
+                                        Settings
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                            {orgUsers.length === 0 && (
+                              <tr>
+                                <td colSpan={5} style={{ opacity: 0.7 }}>
+                                  No visible members in this org.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </section>
       )}
 

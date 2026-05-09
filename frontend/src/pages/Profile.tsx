@@ -195,8 +195,28 @@ export default function Profile() {
 
   if (!user) return null;
 
+  // Where "Back" should point. Tester-tier roles land on the
+  // tester dashboard, everyone else on /admin.
+  const backTarget =
+    user.role === "tester" || user.role === "user" ? "/tester" : "/admin";
+
   return (
     <div className="stack-lg">
+      <div className="profile-header-row">
+        <button
+          type="button"
+          className="btn btn-muted"
+          onClick={() => {
+            // Use history if there's something behind us, else
+            // route to the role-appropriate landing page.
+            if (window.history.length > 1) navigate(-1);
+            else navigate(backTarget, { replace: true });
+          }}
+        >
+          ← Back
+        </button>
+      </div>
+
       <section className="panel panel-hero">
         <h2 className="panel-title">My profile</h2>
         <p className="panel-copy">

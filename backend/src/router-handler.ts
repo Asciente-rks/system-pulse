@@ -32,6 +32,7 @@ import { updateMyName } from "./functions/me/update-name.js";
 import { updateMyEmailStart } from "./functions/me/update-email-start.js";
 import { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
 import { updateOrg } from "./functions/org/update-org.js";
+import { listOrgs } from "./functions/org/list-orgs.js";
 
 type LegacyHandler = (
   event: APIGatewayProxyEvent,
@@ -72,6 +73,7 @@ const routes: Route[] = [
   },
 
   // Org-level admin
+  { method: "GET", path: "/orgs", handler: listOrgs },
   { method: "PATCH", path: "/orgs/:id", handler: updateOrg },
 
   // Users (org-scoped)

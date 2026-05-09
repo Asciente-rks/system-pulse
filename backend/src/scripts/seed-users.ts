@@ -8,7 +8,29 @@ import {
 import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
 import { DEMO_ORG_ID } from "../types/organization.js";
+import { DEFAULT_PERMISSIONS_BY_ROLE } from "../types/user.js";
 
+/**
+ * Bootstrap seed for a fresh deployment.
+ *
+ * What gets created:
+ *   1. The shared "demo" organization that hosts the platform owner's
+ *      personal projects + every demo session that gets spawned via
+ *      `POST /auth/demo`.
+ *   2. **Optionally** a hidden superadmin account read entirely from
+ *      env vars — never hard-coded in source.
+ *      `SEED_SUPERADMIN_EMAIL` + `SEED_SUPERADMIN_PASSWORD` must
+ *      both be set, otherwise the superadmin is skipped.
+ *   3. **Optionally** demo admin / user accounts, also env-gated.
+ *      Useful for local development without going through the full
+ *      register flow. Default behaviour: don't seed them.
+ *   4. Backfills `orgId = DEMO_ORG_ID` onto any pre-existing legacy
+ *      systems so they show up correctly in the demo org.
+ *
+ * Nothing in this file embeds a password or an email any reviewer
+ * could pull from the repo. The platform owner's superadmin
+ * credentials live in CI/Lambda env, never in git.
+ */
 async function seed() {
   const tableName =
     process.argv[2] ||
@@ -40,7 +62,7 @@ async function seed() {
   const now = new Date().toISOString();
   let failureCount = 0;
 
-  // 1) Demo organization (hosts the platform owner's personal projects).
+  // 1) Demo organization.
   try {
     await docClient.send(
       new PutCommand({
@@ -53,7 +75,10 @@ async function seed() {
           name: "System Pulse Demo",
           slug: "demo",
           isDemo: true,
-          ownerId: "seed-superadmin",
+          // ownerId is left as the literal "platform" sentinel
+          // because there is no real human owning the demo org —
+          // the platform itself does.
+          ownerId: "platform",
           createDate: now,
         },
       }),
@@ -64,61 +89,42 @@ async function seed() {
     failureCount += 1;
   }
 
-  // 2) Seed users (kept for backwards compatibility with existing
-  //    quick-login dev tools). All scoped to the demo org so the
-  //    classic "Tester" / "Admin" buttons land inside the showcase.
-  const users = [
-    {
-      id: "seed-superadmin",
-      email: "superadmin@example.local",
-      full_name: "Super Admin",
-      role: "superadmin",
-      status_: "Active",
-      createDate: now,
-      allowedSystemIds: [],
-      // Superadmin is platform-wide; no orgId needed.
-    },
-    {
-      id: "seed-admin",
-      email: "admin@example.local",
-      full_name: "Admin User",
-      role: "admin",
-      status_: "Active",
-      createDate: now,
-      allowedSystemIds: [],
-      orgId: DEMO_ORG_ID,
-    },
-    {
-      id: "seed-tester",
-      email: "tester@example.local",
-      full_name: "Tester User",
-      role: "tester",
-      status_: "Active",
-      createDate: now,
-      allowedSystemIds: [],
-      orgId: DEMO_ORG_ID,
-    },
-  ];
+  // 2) Env-gated user seeding. Each block runs only if its
+  //    matching credentials are present in env.
+  const seedAccount = async (input: {
+    id: string;
+    email: string | undefined;
+    password: string | undefined;
+    full_name: string;
+    role: "superadmin" | "admin" | "user";
+    orgId?: string;
+  }) => {
+    if (!input.email || !input.password) {
+      console.log(
+        `Skipped ${input.id} (no SEED_${input.id.toUpperCase()}_EMAIL/PASSWORD in env)`,
+      );
+      return;
+    }
 
-  for (const u of users) {
     const salt = randomBytes(16).toString("hex");
-    const derived = scryptSync("Password123!", salt, 64).toString("hex");
+    const derived = scryptSync(input.password, salt, 64).toString("hex");
     const passwordHash = `${salt}:${derived}`;
 
     const item = {
       PK: "USER",
-      SK: `USER#${u.id}`,
+      SK: `USER#${input.id}`,
       entityType: "USER",
-      id: u.id,
-      email: u.email,
-      full_name: u.full_name,
-      role: u.role,
-      status_: u.status_,
+      id: input.id,
+      email: input.email,
+      full_name: input.full_name,
+      role: input.role,
+      status_: "Active",
       passwordHash,
-      createDate: u.createDate,
-      allowedSystemIds: u.allowedSystemIds,
-      ...(u.orgId ? { orgId: u.orgId } : {}),
-    } as any;
+      createDate: now,
+      allowedSystemIds: [],
+      ...(input.orgId ? { orgId: input.orgId } : {}),
+      permissions: { ...DEFAULT_PERMISSIONS_BY_ROLE[input.role] },
+    } as Record<string, unknown>;
 
     try {
       await docClient.send(
@@ -127,16 +133,41 @@ async function seed() {
           Item: item,
         }),
       );
-      console.log(`Seeded user ${u.id}`);
+      console.log(`Seeded ${input.id} (${input.role})`);
     } catch (err) {
-      console.error(`Failed to seed ${u.id}:`, err);
+      console.error(`Failed to seed ${input.id}:`, err);
       failureCount += 1;
     }
-  }
+  };
 
-  // 3) Backfill orgId on any pre-existing systems so they show up
-  //    correctly in the demo org. New systems created via the SaaS
-  //    flow already carry orgId; this only patches legacy data.
+  await seedAccount({
+    id: "seed-superadmin",
+    email: process.env.SEED_SUPERADMIN_EMAIL,
+    password: process.env.SEED_SUPERADMIN_PASSWORD,
+    full_name: process.env.SEED_SUPERADMIN_NAME || "Platform Admin",
+    role: "superadmin",
+    // Superadmin is platform-wide; no orgId.
+  });
+
+  await seedAccount({
+    id: "seed-admin",
+    email: process.env.SEED_DEMO_ADMIN_EMAIL,
+    password: process.env.SEED_DEMO_ADMIN_PASSWORD,
+    full_name: process.env.SEED_DEMO_ADMIN_NAME || "Demo Admin",
+    role: "admin",
+    orgId: DEMO_ORG_ID,
+  });
+
+  await seedAccount({
+    id: "seed-user",
+    email: process.env.SEED_DEMO_USER_EMAIL,
+    password: process.env.SEED_DEMO_USER_PASSWORD,
+    full_name: process.env.SEED_DEMO_USER_NAME || "Demo User",
+    role: "user",
+    orgId: DEMO_ORG_ID,
+  });
+
+  // 3) Backfill orgId on any pre-existing systems.
   let lastEvaluatedKey: Record<string, unknown> | undefined;
   let backfilledSystems = 0;
 
