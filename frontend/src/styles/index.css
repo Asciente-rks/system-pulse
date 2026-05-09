@@ -1218,3 +1218,50 @@ select.field-input {
   font-size: inherit;
   font-family: inherit;
 }
+
+/* Password requirements checklist used by Register / AcceptInvite /
+   ResetPassword. The list updates live as the user types; rules
+   that haven't been satisfied yet stay muted, satisfied rules
+   render in the success colour with a check. */
+.password-checklist {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.password-rule {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  transition: color 120ms ease;
+}
+
+.password-rule.ok {
+  color: var(--success, #10b981);
+}
+
+.password-rule-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 11px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.password-rule.ok .password-rule-icon {
+  background: color-mix(in srgb, var(--success, #10b981) 18%, transparent);
+}
+
+.password-rule-label {
+  white-space: nowrap;
+}

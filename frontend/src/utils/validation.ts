@@ -81,6 +81,22 @@ export const loginSchema = yup.object({
 });
 
 /**
+ * Used by both AcceptInvite and ResetPassword for client-side
+ * validation. The token is server-issued (UUID), so we just bound
+ * the length here and let the API do the actual lookup.
+ */
+export const setupPasswordSchema = yup.object({
+  token: yup
+    .string()
+    .required("Token is required")
+    .max(128, "Token is too long"),
+  password: passwordYup,
+  confirmPassword: yup
+    .string()
+    .oneOf([yup.ref("password")], "Passwords must match"),
+});
+
+/**
  * Convenience: turn a yup ValidationError into a `{ field: message }`
  * map so React forms can display per-field messages.
  */

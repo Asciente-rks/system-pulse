@@ -14,6 +14,9 @@ import {
   registerStartSchema,
   registerVerifySchema,
 } from "../utils/validation";
+import PasswordChecklist, {
+  isPasswordStrong,
+} from "../components/PasswordChecklist";
 
 type Stage = "form" | "otp" | "success";
 
@@ -271,10 +274,7 @@ export default function Register() {
               onChange={updateField("password")}
               autoComplete="new-password"
             />
-            <p className="panel-copy" style={{ fontSize: "0.85em" }}>
-              At least 8 characters with lowercase, uppercase, number, and
-              symbol.
-            </p>
+            <PasswordChecklist password={form.password} />
             {errors.password && (
               <p className="status-error">{errors.password}</p>
             )}
@@ -290,12 +290,23 @@ export default function Register() {
               onChange={updateField("confirmPassword")}
               autoComplete="new-password"
             />
+            {form.confirmPassword.length > 0 &&
+              form.confirmPassword !== form.password && (
+                <p className="status-error">Passwords do not match</p>
+              )}
             {errors.confirmPassword && (
               <p className="status-error">{errors.confirmPassword}</p>
             )}
           </div>
 
-          <button className="btn btn-primary" disabled={loading}>
+          <button
+            className="btn btn-primary"
+            disabled={
+              loading ||
+              !isPasswordStrong(form.password) ||
+              form.password !== form.confirmPassword
+            }
+          >
             {loading ? "Sending code..." : "Send verification code"}
           </button>
 
@@ -333,7 +344,11 @@ export default function Register() {
               className="field-input"
               type="text"
               inputMode="numeric"
-              pattern="\\d{6}"
+              // [0-9]{6} avoids JSX-attribute escaping ambiguity that
+              // `\\d{6}` introduces — JSX double-quoted attributes are
+              // not escape-processed, so `\\d` would land in the HTML
+              // attribute as a literal backslash-d and never match.
+              pattern="[0-9]{6}"
               maxLength={6}
               required
               value={otp}
@@ -347,7 +362,10 @@ export default function Register() {
             {errors.otp && <p className="status-error">{errors.otp}</p>}
           </div>
 
-          <button className="btn btn-primary" disabled={loading}>
+          <button
+            className="btn btn-primary"
+            disabled={loading || otp.length !== 6}
+          >
             {loading ? "Verifying..." : "Verify and create account"}
           </button>
 
