@@ -113,6 +113,8 @@ export const listUsers = async (
           : [],
         orgId: effectiveOrgId(item.orgId),
         permissions: resolvePermissions(item as any),
+        lockedAt: typeof item.lockedAt === "string" ? item.lockedAt : null,
+        failedLoginAttempts: Number(item.failedLoginAttempts || 0),
       }));
 
     return {

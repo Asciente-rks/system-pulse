@@ -109,6 +109,10 @@ export interface SessionUser {
   demoMode?: boolean;
   demoExpiresAt?: number;
   permissions?: UserPermissions;
+  /** ISO timestamp the row was locked. null/undefined ⇒ unlocked. */
+  lockedAt?: string | null;
+  /** Failed-login counter (server-side authoritative). */
+  failedLoginAttempts?: number;
 }
 
 export interface SystemSummary {
@@ -438,6 +442,77 @@ export async function startDemo(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+// ---- Profile / "me" ----
+
+export async function getMe() {
+  return request<{ data?: SessionUser; message?: string }>("/me", {
+    method: "GET",
+  });
+}
+
+export async function updateMyName(payload: {
+  full_name: string;
+  password: string;
+}) {
+  return request<{ message?: string; data?: { full_name: string } }>(
+    "/me/name",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function updateMyEmailStart(payload: {
+  new_email: string;
+  password: string;
+}) {
+  return request<{
+    message?: string;
+    data?: { expiresInMinutes: number; devOtp?: string };
+  }>("/me/email/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMyEmailVerify(payload: { otp: string }) {
+  return request<{ message?: string; data?: { email: string } }>(
+    "/me/email/verify",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+// ---- Org admin ----
+
+export async function updateOrg(payload: { orgId: string; name: string }) {
+  return request<{ message?: string; data?: { id: string; name: string } }>(
+    `/orgs/${encodeURIComponent(payload.orgId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ name: payload.name }),
+    },
+  );
+}
+
+// ---- Account lock ----
+
+export async function unlockUser(payload: {
+  userId: string;
+  actorPassword: string;
+}) {
+  return request<{ message?: string; data?: { userId: string } }>(
+    `/users/${encodeURIComponent(payload.userId)}/unlock`,
+    {
+      method: "POST",
+      body: JSON.stringify({ actorPassword: payload.actorPassword }),
+    },
+  );
 }
 
 // ---- Permission helpers ----

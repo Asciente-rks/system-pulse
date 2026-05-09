@@ -153,7 +153,23 @@ export interface User {
   demoMode?: boolean;
   /** Demo accounts auto-expire. Backed by table TTL `expiresAt`. */
   demoExpiresAt?: number;
+  /**
+   * Failed-login counter. Reset on every successful login. When it
+   * crosses MAX_FAILED_LOGIN_ATTEMPTS the row gets `lockedAt` set
+   * and the login endpoint refuses to verify the password until an
+   * admin clears it.
+   */
+  failedLoginAttempts?: number;
+  /** ISO timestamp the row was locked. `undefined` ⇒ unlocked. */
+  lockedAt?: string;
 }
+
+/**
+ * Lock the account after this many consecutive failed login
+ * attempts. Three is the standard floor for security-conscious
+ * SaaS; admins / owners can manually unlock from the dashboard.
+ */
+export const MAX_FAILED_LOGIN_ATTEMPTS = 3;
 
 export interface CreateUserInput extends Omit<User, "id" | "createDate"> {}
 

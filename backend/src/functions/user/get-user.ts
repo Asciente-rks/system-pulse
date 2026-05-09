@@ -136,6 +136,8 @@ export const getUser = async (
             : [],
           orgId: effectiveOrgId(user.orgId),
           permissions: resolvePermissions(user as any),
+          lockedAt: typeof user.lockedAt === "string" ? user.lockedAt : null,
+          failedLoginAttempts: Number(user.failedLoginAttempts || 0),
         },
       }),
     };

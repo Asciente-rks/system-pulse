@@ -15,6 +15,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import TesterDashboard from "./pages/TesterDashboard";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import Profile from "./pages/Profile";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { isAuthenticated } = useAuth();
@@ -30,7 +31,7 @@ function RequireRoles({
   roles,
   children,
 }: {
-  roles: Array<"superadmin" | "admin" | "tester" | "user">;
+  roles: Array<"superadmin" | "owner" | "admin" | "tester" | "user">;
   children: JSX.Element;
 }) {
   const { user } = useAuth();
@@ -98,7 +99,7 @@ function AppShell() {
             path="/admin"
             element={
               <RequireAuth>
-                <RequireRoles roles={["superadmin", "admin"]}>
+                <RequireRoles roles={["superadmin", "owner", "admin"]}>
                   <AdminDashboard />
                 </RequireRoles>
               </RequireAuth>
@@ -112,6 +113,15 @@ function AppShell() {
                 <RequireRoles roles={["tester", "user"]}>
                   <TesterDashboard />
                 </RequireRoles>
+              </RequireAuth>
+            }
+          />
+
+          <Route
+            path="/profile"
+            element={
+              <RequireAuth>
+                <Profile />
               </RequireAuth>
             }
           />

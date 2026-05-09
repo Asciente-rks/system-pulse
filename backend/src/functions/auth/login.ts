@@ -1,17 +1,27 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  GetCommand,
+  QueryCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
 import { loginSchema } from "../../validation/user-validation.js";
 import { verifyPassword } from "../../utils/password.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
-import { resolvePermissions } from "../../types/user.js";
+import {
+  MAX_FAILED_LOGIN_ATTEMPTS,
+  resolvePermissions,
+} from "../../types/user.js";
 
 interface LoginBody {
   email: string;
   password: string;
 }
+
+const LOCKED_MESSAGE =
+  "Account locked due to too many failed login attempts. Contact your supervisor or org admin to unlock.";
 
 export const login = async (
   event: APIGatewayProxyEvent,
@@ -68,16 +78,70 @@ export const login = async (
       };
     }
 
+    // Locked accounts cannot proceed regardless of password match.
+    // We answer with 423 (RFC 4918) so the client can recognise the
+    // distinct case and show the contact-supervisor UI.
+    if (typeof user.lockedAt === "string" && user.lockedAt.length > 0) {
+      return {
+        statusCode: 423,
+        headers,
+        body: JSON.stringify({
+          status: 423,
+          message: LOCKED_MESSAGE,
+        }),
+      };
+    }
+
     if (
       !verifyPassword(
         validated.password,
         user.passwordHash as string | undefined,
       )
     ) {
+      // Increment the failed counter and lock if we crossed the cap.
+      const currentAttempts = Number(user.failedLoginAttempts || 0) + 1;
+      const willLock = currentAttempts >= MAX_FAILED_LOGIN_ATTEMPTS;
+
+      try {
+        await docClient.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { PK: user.PK, SK: user.SK },
+            UpdateExpression: willLock
+              ? "SET failedLoginAttempts = :n, lockedAt = :ts"
+              : "SET failedLoginAttempts = :n",
+            ExpressionAttributeValues: willLock
+              ? {
+                  ":n": currentAttempts,
+                  ":ts": new Date().toISOString(),
+                }
+              : { ":n": currentAttempts },
+          }),
+        );
+      } catch (counterError) {
+        console.warn("login: failed-counter update failed", counterError);
+      }
+
+      if (willLock) {
+        return {
+          statusCode: 423,
+          headers,
+          body: JSON.stringify({
+            status: 423,
+            message: LOCKED_MESSAGE,
+          }),
+        };
+      }
+
+      const remaining = MAX_FAILED_LOGIN_ATTEMPTS - currentAttempts;
       return {
         statusCode: 401,
         headers,
-        body: JSON.stringify({ message: "Invalid email or password" }),
+        body: JSON.stringify({
+          message: `Invalid email or password. ${remaining} attempt${
+            remaining === 1 ? "" : "s"
+          } left before the account is locked.`,
+        }),
       };
     }
 
@@ -91,8 +155,25 @@ export const login = async (
       };
     }
 
-    // Resolve the org name (best-effort: org may be null for the
-    // platform-level superadmin).
+    // Successful login: reset the failed counter so an unlucky typo
+    // streak doesn't lock the user later.
+    if (Number(user.failedLoginAttempts || 0) > 0) {
+      try {
+        await docClient.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { PK: user.PK, SK: user.SK },
+            UpdateExpression:
+              "SET failedLoginAttempts = :zero REMOVE lockedAt",
+            ExpressionAttributeValues: { ":zero": 0 },
+          }),
+        );
+      } catch (resetError) {
+        console.warn("login: failed-counter reset failed", resetError);
+      }
+    }
+
+    // Resolve org name (best-effort).
     let orgName: string | undefined;
     const orgId = (user.orgId as string | undefined) || undefined;
     if (orgId) {

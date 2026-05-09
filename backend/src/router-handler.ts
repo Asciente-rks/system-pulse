@@ -17,6 +17,7 @@ import { acceptUserInvitation } from "./functions/user/accept-invite.js";
 import { assignSystemAccess } from "./functions/user/assign-system-access.js";
 import { updateUserPermissions } from "./functions/user/update-permissions.js";
 import { changeUserRole } from "./functions/user/change-role.js";
+import { unlockUser } from "./functions/user/unlock-user.js";
 import { listUsers } from "./functions/user/list-users.js";
 import { getUser } from "./functions/user/get-user.js";
 import { deleteUser } from "./functions/user/delete-user.js";
@@ -26,6 +27,11 @@ import { updateSystem } from "./functions/health/update-system.js";
 import { deleteSystem } from "./functions/health/delete-system.js";
 import { triggerHealthCheck } from "./functions/health/trigger-health.js";
 import { getSystemLogs } from "./functions/health/get-system-logs.js";
+import { getMe } from "./functions/me/get-me.js";
+import { updateMyName } from "./functions/me/update-name.js";
+import { updateMyEmailStart } from "./functions/me/update-email-start.js";
+import { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
+import { updateOrg } from "./functions/org/update-org.js";
 
 type LegacyHandler = (
   event: APIGatewayProxyEvent,
@@ -43,13 +49,30 @@ const routes: Route[] = [
   { method: "POST", path: "/auth/forgot-password", handler: forgotPassword },
   { method: "POST", path: "/auth/reset-password", handler: resetPassword },
 
-  // Self-serve registration (multi-tenant SaaS)
+  // Self-serve registration
   { method: "POST", path: "/auth/register/start", handler: registerStart },
   { method: "POST", path: "/auth/register/verify", handler: registerVerify },
   { method: "POST", path: "/auth/register/resend", handler: registerResend },
 
   // Demo session
   { method: "POST", path: "/auth/demo", handler: demoStart },
+
+  // Profile / "me"
+  { method: "GET", path: "/me", handler: getMe },
+  { method: "POST", path: "/me/name", handler: updateMyName },
+  {
+    method: "POST",
+    path: "/me/email/start",
+    handler: updateMyEmailStart,
+  },
+  {
+    method: "POST",
+    path: "/me/email/verify",
+    handler: updateMyEmailVerify,
+  },
+
+  // Org-level admin
+  { method: "PATCH", path: "/orgs/:id", handler: updateOrg },
 
   // Users (org-scoped)
   { method: "POST", path: "/users/invite", handler: createUserInvitation },
@@ -65,6 +88,7 @@ const routes: Route[] = [
     handler: updateUserPermissions,
   },
   { method: "POST", path: "/users/:id/role", handler: changeUserRole },
+  { method: "POST", path: "/users/:id/unlock", handler: unlockUser },
   { method: "GET", path: "/users", handler: listUsers },
   { method: "GET", path: "/users/:id", handler: getUser },
   { method: "DELETE", path: "/users/:id", handler: deleteUser },

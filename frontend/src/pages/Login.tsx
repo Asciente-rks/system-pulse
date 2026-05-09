@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   forgotPassword,
   login,
@@ -38,28 +38,6 @@ const TABS: Array<{ id: Tab; label: string }> = [
 interface LoginProps {
   defaultTab?: Tab;
 }
-
-type DevAccount = {
-  label: string;
-  email: string;
-  password: string;
-  role: string;
-};
-
-const DEV_ACCOUNTS: DevAccount[] = [
-  {
-    label: "Admin",
-    email: "admin@example.local",
-    password: "Password123!",
-    role: "admin",
-  },
-  {
-    label: "Tester",
-    email: "tester@example.local",
-    password: "Password123!",
-    role: "tester",
-  },
-];
 
 interface RegisterFields {
   email: string;
@@ -118,7 +96,6 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
 
   // ---- Shared loading + demo state ----
   const [loading, setLoading] = useState(false);
-  const [devOpen, setDevOpen] = useState(false);
   const [demoOpen, setDemoOpen] = useState(false);
 
   // Authenticated users land on the right dashboard.
@@ -170,8 +147,22 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
         setSigninError("Too many login attempts. Please wait a moment.");
         return;
       }
+      // 423 Locked is the new lockout signal: account hit the max
+      // failed-attempt threshold. The backend includes a contact-
+      // your-supervisor message we can render verbatim.
+      if (response._httpStatus === 423) {
+        setSigninError(
+          response.message ||
+            "Account locked. Contact your supervisor or org admin to unlock.",
+        );
+        return;
+      }
       if (response._httpStatus === 401) {
-        setSigninError("Invalid email or password.");
+        // The backend tells us how many attempts are left in the
+        // message — surface that to the user so they aren't blindsided.
+        setSigninError(
+          response.message || "Invalid email or password.",
+        );
         return;
       }
       if (response._httpStatus !== 200 || !response.data) {
@@ -218,13 +209,6 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
     } finally {
       setLoading(false);
     }
-  }
-
-  function handleDevPick(account: DevAccount) {
-    setSigninEmail(account.email);
-    setSigninPassword(account.password);
-    setDevOpen(false);
-    void performSignIn(account.email, account.password);
   }
 
   async function submitForgot(event: React.FormEvent) {
@@ -737,71 +721,6 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
         <div
           className="dev-quick-backdrop"
           onClick={() => setDemoOpen(false)}
-        />
-      )}
-
-      <button
-        type="button"
-        className="dev-quick-btn"
-        onClick={() => setDevOpen((value) => !value)}
-        title="Dev Tools"
-        aria-label="Dev Tools"
-      >
-        <span className="dev-quick-icon">⚙</span>
-        <span>Dev Tools</span>
-      </button>
-
-      {devOpen && (
-        <div
-          className="dev-quick-popover"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Dev Tools"
-        >
-          <button
-            type="button"
-            className="dev-quick-close"
-            onClick={() => setDevOpen(false)}
-            aria-label="Close Dev Tools"
-          >
-            ✕
-          </button>
-          <div className="dev-quick-header">
-            <h3 className="dev-quick-title">Dev Tools</h3>
-            <span className="dev-quick-tag">demo</span>
-          </div>
-          <p className="dev-quick-help">
-            Quick-login as a seeded account so portfolio reviewers don't have
-            to type anything.
-          </p>
-          <div className="dev-quick-list">
-            {DEV_ACCOUNTS.map((account) => (
-              <button
-                key={account.email}
-                type="button"
-                className="dev-quick-option"
-                disabled={loading}
-                onClick={() => handleDevPick(account)}
-              >
-                <span className="dev-quick-role">{account.label}</span>
-                <code className="dev-quick-email">{account.email}</code>
-              </button>
-            ))}
-          </div>
-          <p className="dev-quick-help" style={{ marginTop: 8 }}>
-            Or use{" "}
-            <Link to="/login" onClick={() => setTab("signin")}>
-              Sign in
-            </Link>{" "}
-            with your real account.
-          </p>
-        </div>
-      )}
-
-      {devOpen && (
-        <div
-          className="dev-quick-backdrop"
-          onClick={() => setDevOpen(false)}
         />
       )}
     </section>

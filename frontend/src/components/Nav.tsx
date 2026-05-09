@@ -1,5 +1,5 @@
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useTheme } from "../hooks/useTheme";
 import logoDark from "../../assets/No_Name_Dark.png";
@@ -56,7 +56,12 @@ export default function Nav() {
         <button className="btn btn-muted" onClick={toggleTheme}>
           {theme === "dark" ? "Light" : "Dark"} Mode
         </button>
-        <p className="session-user">{user.full_name}</p>
+        {!isDemo && (
+          <Link to="/profile" className="btn btn-surface">
+            {user.full_name}
+          </Link>
+        )}
+        {isDemo && <p className="session-user">{user.full_name}</p>}
         <button className="btn btn-logout" onClick={onLogout}>
           {isDemo ? "Exit demo" : "Logout"}
         </button>

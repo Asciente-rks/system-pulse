@@ -13,9 +13,9 @@ import {
   PERMISSION_KEYS,
   PERMISSION_LABELS,
   triggerHealth,
+  unlockUser,
   updateSystem,
   updateUserPermissions,
-  userCan,
   type AuthRole,
   type SessionUser,
   type SystemSummary,
@@ -60,6 +60,10 @@ export default function AdminDashboard() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState<AuthRole>("user");
+
+  // Unlock modal
+  const [unlockTarget, setUnlockTarget] = useState<SessionUser | null>(null);
+  const [unlockPassword, setUnlockPassword] = useState("");
 
   // Create system form
   const [systemName, setSystemName] = useState("");
@@ -110,14 +114,15 @@ export default function AdminDashboard() {
   const [editSystemMode, setEditSystemMode] =
     useState<DeploymentModeInput>("auto");
 
+  // Owners (and superadmins) can invite either admins or users.
+  // Plain admins can only invite users — they cannot mint other
+  // admins. `tester` is a legacy alias retained on the backend
+  // for old data; we no longer expose it as a creation choice.
   const inviteRoleOptions = useMemo(() => {
-    if (user?.role === "superadmin") {
-      return ["admin", "user", "tester"] as const;
+    if (user?.role === "superadmin" || isOwner) {
+      return ["admin", "user"] as const;
     }
-    if (isOwner) {
-      return ["admin", "user", "tester"] as const;
-    }
-    return ["user", "tester"] as const;
+    return ["user"] as const;
   }, [user?.role, isOwner]);
 
   const totalUserPages = Math.max(
@@ -488,6 +493,34 @@ export default function AdminDashboard() {
     }
   }
 
+  async function handleUnlockSubmit() {
+    if (!unlockTarget) return;
+    if (!unlockPassword) {
+      setErrorMessage("Enter your password to unlock the account.");
+      return;
+    }
+    setBusy("unlock-user");
+    setErrorMessage(null);
+    try {
+      const response = await unlockUser({
+        userId: unlockTarget.id,
+        actorPassword: unlockPassword,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not unlock account"),
+        );
+        return;
+      }
+      setStatusMessage(`Unlocked ${unlockTarget.full_name}`);
+      setUnlockTarget(null);
+      setUnlockPassword("");
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function handleDeleteSystem() {
     if (!deleteSystemTarget) return;
     if (systemDeleteConfirm !== "DELETE") {
@@ -770,7 +803,7 @@ export default function AdminDashboard() {
                       {busy === `logs-${system.id}` ? "Loading..." : "Logs"}
                     </button>
                     <button
-                      className="btn btn-surface system-action-btn"
+                      className="btn btn-info system-action-btn"
                       onClick={() => openSystemEditor(system)}
                       disabled={!canUpdateSystemPerm}
                       title={
@@ -888,34 +921,58 @@ export default function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {pagedUsers.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{entry.full_name}</td>
-                    <td>{entry.email}</td>
-                    <td>
-                      <span className={`role-pill role-${entry.role}`}>
-                        {entry.role}
-                      </span>
-                    </td>
-                    <td>{entry.status_}</td>
-                    <td>
-                      <button
-                        className="btn btn-surface"
-                        onClick={() => openUserSettings(entry)}
-                        disabled={!canUpdateUserPerm}
-                        title={
-                          !canUpdateUserPerm && isDemo
-                            ? DEMO_DISABLED_NOTE
-                            : !canUpdateUserPerm
-                              ? "You need canUpdateUser permission"
-                              : undefined
-                        }
-                      >
-                        Settings
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {pagedUsers.map((entry) => {
+                  const locked = Boolean(entry.lockedAt);
+                  return (
+                    <tr key={entry.id}>
+                      <td>{entry.full_name}</td>
+                      <td>{entry.email}</td>
+                      <td>
+                        <span className={`role-pill role-${entry.role}`}>
+                          {entry.role}
+                        </span>
+                      </td>
+                      <td>
+                        {locked ? (
+                          <span className="role-pill role-locked" title={`Locked at ${entry.lockedAt}`}>
+                            🔒 Locked
+                          </span>
+                        ) : (
+                          entry.status_
+                        )}
+                      </td>
+                      <td>
+                        <div className="button-row" style={{ gap: 6 }}>
+                          {locked && canUpdateUserPerm && (
+                            <button
+                              className="btn btn-info"
+                              onClick={() => {
+                                setUnlockTarget(entry);
+                                setUnlockPassword("");
+                              }}
+                            >
+                              Unlock
+                            </button>
+                          )}
+                          <button
+                            className="btn btn-surface"
+                            onClick={() => openUserSettings(entry)}
+                            disabled={!canUpdateUserPerm}
+                            title={
+                              !canUpdateUserPerm && isDemo
+                                ? DEMO_DISABLED_NOTE
+                                : !canUpdateUserPerm
+                                  ? "You need canUpdateUser permission"
+                                  : undefined
+                            }
+                          >
+                            Settings
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1228,6 +1285,56 @@ export default function AdminDashboard() {
                 Cancel
               </button>
             </footer>
+          </div>
+        </div>
+      )}
+
+      {/* Unlock account modal */}
+      {unlockTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => setUnlockTarget(null)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="panel-subtitle">Unlock account</h3>
+            <p className="panel-copy compact-copy">
+              Unlock <strong>{unlockTarget.full_name}</strong>'s account
+              ({unlockTarget.email}). Confirm with your password to proceed.
+              The user will be able to sign in immediately afterwards.
+            </p>
+
+            <div className="form-field">
+              <label className="field-label">Your password</label>
+              <input
+                className="field-input"
+                type="password"
+                value={unlockPassword}
+                onChange={(event) => setUnlockPassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+
+            <div className="modal-actions">
+              <button
+                className="btn btn-primary"
+                onClick={handleUnlockSubmit}
+                disabled={busy === "unlock-user" || !unlockPassword}
+              >
+                {busy === "unlock-user" ? "Unlocking..." : "Unlock account"}
+              </button>
+              <button
+                className="btn btn-muted"
+                onClick={() => {
+                  setUnlockTarget(null);
+                  setUnlockPassword("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
