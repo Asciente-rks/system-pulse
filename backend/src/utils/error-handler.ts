@@ -14,7 +14,7 @@ export const headers = {
   "Cache-Control": "no-store, no-cache, must-revalidate, private",
   "Pragma": "no-cache",
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   // Keep this list in lock-step with frontend/src/services/api.ts:
   // every header the SPA sends must be allowed in preflight or the
   // browser will refuse the request.

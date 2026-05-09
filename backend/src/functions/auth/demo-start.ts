@@ -9,6 +9,7 @@ import {
   createOrganizationService,
 } from "../../services/organization-service.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
+import { resolvePermissions } from "../../types/user.js";
 
 const DEMO_TTL_SECONDS_DEFAULT = 60 * 60; // 1 hour
 
@@ -99,6 +100,7 @@ export const demoStart = async (
             orgName: demoOrg.name,
             demoMode: true,
             demoExpiresAt: user.demoExpiresAt,
+            permissions: resolvePermissions(user as any),
           },
           ttlSeconds,
         },

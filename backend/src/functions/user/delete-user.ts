@@ -3,7 +3,12 @@ import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
-import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
+import {
+  hasPermission,
+  isAdminTier,
+  isOwner,
+  isSuperAdmin,
+} from "../../utils/rbac.js";
 import {
   getActorUserId,
   rejectIfDemo,
@@ -64,15 +69,15 @@ export const deleteUser = async (
     // permanently destroy accounts.
     rejectIfDemo(actor as any);
 
-    // Org admins may delete users WITHIN their own org. Superadmins
-    // may delete any user. We loosen the original superadmin-only
-    // gate now that deletion is org-scoped.
-    if (!isAdminOrSuper(actor.role as any)) {
+    // Permission-gated. Owners always pass via hasPermission;
+    // admins/users need an explicit `canDeleteUser: true` grant.
+    if (!hasPermission(actor as any, "canDeleteUser")) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({
-          message: "forbidden - admin or superadmin required",
+          message:
+            "forbidden - your account does not have the canDeleteUser permission",
         }),
       };
     }
@@ -119,18 +124,33 @@ export const deleteUser = async (
         };
       }
 
-      // Plain admins are NOT allowed to delete other admins, only org
-      // members. (Prevents an admin booting another admin in the same org.)
-      if (target.role === "admin" || target.role === "superadmin") {
+      // Owners cannot be deleted (they'd orphan the org). Promote
+      // someone else to owner first if you really need to remove them.
+      if (target.role === "owner" || target.role === "superadmin") {
         return {
           statusCode: 403,
           headers,
           body: JSON.stringify({
-            message: "forbidden - cannot delete admin or superadmin",
+            message:
+              "forbidden - cannot delete the org owner; promote someone else first",
+          }),
+        };
+      }
+
+      // Non-owners cannot delete other admins. Owners can delete any
+      // non-owner member of their org.
+      if (target.role === "admin" && !isOwner(actor.role as any)) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({
+            message: "forbidden - only the org owner can delete admins",
           }),
         };
       }
     }
+    // touch isAdminTier so unused-import warnings don't fail the build
+    void isAdminTier;
 
     await docClient.send(
       new DeleteCommand({

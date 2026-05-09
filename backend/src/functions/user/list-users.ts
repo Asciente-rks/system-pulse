@@ -9,6 +9,7 @@ import {
 } from "../../utils/rbac.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { resolvePermissions } from "../../types/user.js";
 
 const effectiveOrgId = (orgId?: unknown): string =>
   typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
@@ -111,6 +112,7 @@ export const listUsers = async (
           ? item.allowedSystemIds
           : [],
         orgId: effectiveOrgId(item.orgId),
+        permissions: resolvePermissions(item as any),
       }));
 
     return {

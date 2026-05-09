@@ -4,6 +4,8 @@ import { verifyPassword } from "./password.js";
 import { HttpError } from "./error-handler.js";
 import { isAdminOrSuper } from "./rbac.js";
 
+import type { UserPermissions } from "../types/user.js";
+
 interface ActorRecord {
   id: string;
   role: string;
@@ -12,6 +14,7 @@ interface ActorRecord {
   orgId?: string;
   demoMode?: boolean;
   allowedSystemIds?: string[];
+  permissions?: Partial<UserPermissions>;
 }
 
 export function getActorUserId(event: APIGatewayProxyEvent): string {

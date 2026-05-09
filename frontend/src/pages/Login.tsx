@@ -1,10 +1,43 @@
-import React, { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { login, startDemo } from "../services/api";
+import React, { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import {
+  forgotPassword,
+  login,
+  registerResend,
+  registerStart,
+  registerVerify,
+  startDemo,
+} from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import { useTheme } from "../hooks/useTheme";
 import logoDark from "../../assets/With_Name_Dark.png";
 import logoLight from "../../assets/With_Name_Light.png";
+import PasswordChecklist, {
+  isPasswordStrong,
+} from "../components/PasswordChecklist";
+import {
+  fieldErrors,
+  registerStartSchema,
+  registerVerifySchema,
+} from "../utils/validation";
+
+type Tab = "signin" | "forgot" | "register";
+
+const TAB_TO_PATH: Record<Tab, string> = {
+  signin: "/login",
+  forgot: "/forgot-password",
+  register: "/register",
+};
+
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: "signin", label: "Sign in" },
+  { id: "forgot", label: "Forgot" },
+  { id: "register", label: "Sign up" },
+];
+
+interface LoginProps {
+  defaultTab?: Tab;
+}
 
 type DevAccount = {
   label: string;
@@ -28,60 +61,124 @@ const DEV_ACCOUNTS: DevAccount[] = [
   },
 ];
 
-export default function Login() {
+interface RegisterFields {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  full_name: string;
+  org_name: string;
+}
+
+const INITIAL_REGISTER: RegisterFields = {
+  email: "",
+  password: "",
+  confirmPassword: "",
+  full_name: "",
+  org_name: "",
+};
+
+type RegisterStage = "form" | "otp" | "success";
+
+export default function Login({ defaultTab = "signin" }: LoginProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, signIn } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // Initial tab is derived from `defaultTab` (route-based) but the
+  // user can switch freely between tabs without leaving /login.
+  const [tab, setTab] = useState<Tab>(defaultTab);
+
+  // ---- Sign in state ----
+  const [signinEmail, setSigninEmail] = useState("");
+  const [signinPassword, setSigninPassword] = useState("");
+  const [signinError, setSigninError] = useState<string | null>(null);
+  const [signinStatus, setSigninStatus] = useState<string | null>(null);
+
+  // ---- Forgot password state ----
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotStatus, setForgotStatus] = useState<string | null>(null);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
+  // ---- Register state ----
+  const [regForm, setRegForm] = useState<RegisterFields>(INITIAL_REGISTER);
+  const [regStage, setRegStage] = useState<RegisterStage>("form");
+  const [regOtp, setRegOtp] = useState("");
+  const [regErrors, setRegErrors] = useState<Record<string, string>>({});
+  const [regStatus, setRegStatus] = useState<string | null>(null);
+  const [regError, setRegError] = useState<string | null>(null);
+  const [regOtpExpiresInMinutes, setRegOtpExpiresInMinutes] = useState<
+    number | null
+  >(null);
+  const [regDevOtp, setRegDevOtp] = useState<string | null>(null);
+  const [regCreatedOrgName, setRegCreatedOrgName] = useState<string | null>(
+    null,
+  );
+  const [regResendCooldown, setRegResendCooldown] = useState(0);
+
+  // ---- Shared loading + demo state ----
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [devOpen, setDevOpen] = useState(false);
   const [demoOpen, setDemoOpen] = useState(false);
 
+  // Authenticated users land on the right dashboard.
   useEffect(() => {
-    if (!user) {
-      return;
-    }
-
+    if (!user) return;
     if (user.role === "tester" || user.role === "user") {
       navigate("/tester", { replace: true });
       return;
     }
-
     navigate("/admin", { replace: true });
   }, [navigate, user]);
 
-  async function performLogin(
-    candidateEmail: string,
-    candidatePassword: string,
-  ): Promise<void> {
+  // Sync tab → URL so reload / browser nav remember position.
+  useEffect(() => {
+    const target = TAB_TO_PATH[tab];
+    if (location.pathname !== target) {
+      navigate(target, { replace: true });
+    }
+  }, [tab, location.pathname, navigate]);
+
+  // Resend countdown.
+  useEffect(() => {
+    if (regResendCooldown <= 0) return;
+    const id = window.setInterval(
+      () => setRegResendCooldown((value) => Math.max(0, value - 1)),
+      1000,
+    );
+    return () => window.clearInterval(id);
+  }, [regResendCooldown]);
+
+  const heroBlurb = useMemo(() => {
+    if (tab === "signin") {
+      return "Sign in to your organization.";
+    }
+    if (tab === "forgot") {
+      return "Enter your email and we'll send a reset link if the account exists.";
+    }
+    return "Create a free workspace in a minute. Verify with a 6-digit code we email you.";
+  }, [tab]);
+
+  // ---------- handlers ----------
+  async function performSignIn(email: string, password: string) {
     setLoading(true);
-    setError(null);
-    setStatusMessage(null);
-
+    setSigninError(null);
+    setSigninStatus(null);
     try {
-      const response = await login(candidateEmail, candidatePassword);
-
+      const response = await login(email, password);
       if (response._httpStatus === 429) {
-        setError("Too many login attempts. Please wait a moment.");
+        setSigninError("Too many login attempts. Please wait a moment.");
         return;
       }
-
       if (response._httpStatus === 401) {
-        setError("Invalid email or password.");
+        setSigninError("Invalid email or password.");
         return;
       }
-
       if (response._httpStatus !== 200 || !response.data) {
-        setError(response.message || "Login failed");
+        setSigninError(response.message || "Login failed");
         return;
       }
-
       signIn(response.data);
-
       if (response.data.role === "tester" || response.data.role === "user") {
         navigate("/tester", { replace: true });
       } else {
@@ -94,29 +191,25 @@ export default function Login() {
 
   async function startDemoSession(role: "admin" | "user") {
     setLoading(true);
-    setError(null);
-    setStatusMessage(null);
+    setSigninError(null);
+    setSigninStatus(null);
     setDemoOpen(false);
-
     try {
       const response = await startDemo({
         role,
         display_name: role === "admin" ? "Demo Admin" : "Demo Tester",
       });
-
       if (response._httpStatus !== 201 || !response.data) {
-        setError(response.message || "Could not start demo session");
+        setSigninError(response.message || "Could not start demo session");
         return;
       }
-
       const demoUser = response.data.user;
       signIn(demoUser);
-      setStatusMessage(
+      setSigninStatus(
         `Demo started. Session expires in about ${Math.round(
           (response.data.ttlSeconds || 0) / 60,
         )} minutes.`,
       );
-
       if (demoUser.role === "user" || demoUser.role === "tester") {
         navigate("/tester", { replace: true });
       } else {
@@ -127,16 +220,142 @@ export default function Login() {
     }
   }
 
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    await performLogin(email, password);
+  function handleDevPick(account: DevAccount) {
+    setSigninEmail(account.email);
+    setSigninPassword(account.password);
+    setDevOpen(false);
+    void performSignIn(account.email, account.password);
   }
 
-  function handleDevPick(account: DevAccount) {
-    setEmail(account.email);
-    setPassword(account.password);
-    setDevOpen(false);
-    void performLogin(account.email, account.password);
+  async function submitForgot(event: React.FormEvent) {
+    event.preventDefault();
+    setForgotError(null);
+    setForgotStatus(null);
+    setLoading(true);
+    try {
+      const response = await forgotPassword(forgotEmail);
+      if (response._httpStatus >= 400) {
+        setForgotError(response.message || "Forgot password request failed");
+        return;
+      }
+      setForgotStatus(
+        response.message ||
+          "If the account exists, a reset link has been emailed.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ---- Register handlers ----
+  const updateRegField =
+    (key: keyof RegisterFields) =>
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setRegForm((current) => ({ ...current, [key]: event.target.value }));
+    };
+
+  async function submitRegisterForm(event: React.FormEvent) {
+    event.preventDefault();
+    setRegStatus(null);
+    setRegError(null);
+
+    let validated: RegisterFields;
+    try {
+      validated = (await registerStartSchema.validate(regForm, {
+        abortEarly: false,
+        stripUnknown: true,
+      })) as RegisterFields;
+      setRegErrors({});
+    } catch (validationError) {
+      setRegErrors(fieldErrors(validationError));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await registerStart(validated);
+      if (response._httpStatus === 429) {
+        setRegError(
+          response.message || "Too many attempts. Please wait and retry.",
+        );
+        return;
+      }
+      if (response._httpStatus !== 200) {
+        setRegError(response.message || "Registration failed");
+        return;
+      }
+      setRegStage("otp");
+      setRegOtpExpiresInMinutes(response.data?.expiresInMinutes ?? null);
+      setRegDevOtp(response.data?.devOtp || null);
+      setRegStatus(
+        response.message || "Verification code sent. Check your email.",
+      );
+      setRegResendCooldown(30);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitRegisterOtp(event: React.FormEvent) {
+    event.preventDefault();
+    setRegStatus(null);
+    setRegError(null);
+
+    try {
+      await registerVerifySchema.validate(
+        { email: regForm.email, otp: regOtp },
+        { abortEarly: false, stripUnknown: true },
+      );
+      setRegErrors({});
+    } catch (validationError) {
+      setRegErrors(fieldErrors(validationError));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await registerVerify({
+        email: regForm.email.trim().toLowerCase(),
+        otp: regOtp,
+      });
+      if (response._httpStatus !== 201) {
+        setRegError(response.message || "Verification failed");
+        return;
+      }
+      const created = response.data?.user;
+      const org = response.data?.org;
+      if (created) signIn(created);
+      if (org) setRegCreatedOrgName(org.name);
+      setRegStage("success");
+      setRegStatus(
+        response.message ||
+          "Account verified. Your free organization is ready.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resendRegisterOtp() {
+    if (regResendCooldown > 0) return;
+    setLoading(true);
+    setRegError(null);
+    setRegStatus(null);
+    try {
+      const response = await registerResend(
+        regForm.email.trim().toLowerCase(),
+      );
+      if (response._httpStatus !== 200) {
+        setRegError(response.message || "Resend failed");
+        return;
+      }
+      setRegStatus(response.message || "A fresh code has been sent.");
+      setRegOtpExpiresInMinutes(response.data?.expiresInMinutes ?? null);
+      setRegDevOtp(response.data?.devOtp || null);
+      setRegResendCooldown(30);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -154,63 +373,319 @@ export default function Login() {
         />
         <p className="auth-kicker">System Pulse</p>
         <h1 className="auth-title">Production Health Control</h1>
-        <p className="auth-copy">
-          Sign in to your organization. New here? Create a free workspace in a
-          minute, or jump into demo mode to explore real systems with safety
-          guards.
-        </p>
+        <p className="auth-copy">{heroBlurb}</p>
       </div>
 
-      <form className="auth-card" onSubmit={onSubmit}>
-        <h2 className="panel-title">Login</h2>
-
-        <div className="form-field">
-          <label className="field-label">Email</label>
-          <input
-            className="field-input"
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
+      <div className="auth-card">
+        <div className="auth-tab-strip" role="tablist" aria-label="Auth flow">
+          {TABS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={tab === entry.id}
+              className={`auth-tab ${tab === entry.id ? "active" : ""}`}
+              onClick={() => {
+                setTab(entry.id);
+                if (entry.id === "register") setRegStage("form");
+                setSigninError(null);
+                setForgotError(null);
+                setRegError(null);
+              }}
+            >
+              {entry.label}
+            </button>
+          ))}
         </div>
 
-        <div className="form-field">
-          <label className="field-label">Password</label>
-          <input
-            className="field-input"
-            type="password"
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </div>
-
-        <button className="btn btn-primary" disabled={loading}>
-          {loading ? "Signing in..." : "Sign in"}
-        </button>
-
-        {error && <p className="status-error">{error}</p>}
-        {statusMessage && <p className="status-note">{statusMessage}</p>}
-
-        <div className="button-row" style={{ marginTop: "0.75rem" }}>
-          <Link to="/register" className="btn btn-muted">
-            Sign up
-          </Link>
-          <button
-            type="button"
-            className="btn btn-accent"
-            disabled={loading}
-            onClick={() => setDemoOpen((value) => !value)}
+        {tab === "signin" && (
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void performSignIn(signinEmail, signinPassword);
+            }}
+            className="auth-form"
           >
-            Try demo mode
-          </button>
-        </div>
+            <h2 className="panel-title">Welcome back</h2>
 
-        <p className="panel-copy">
-          <Link to="/forgot-password">Forgot password?</Link>
-        </p>
-      </form>
+            <div className="form-field">
+              <label className="field-label">Email</label>
+              <input
+                className="field-input"
+                type="email"
+                required
+                value={signinEmail}
+                onChange={(event) => setSigninEmail(event.target.value)}
+                autoComplete="email"
+              />
+            </div>
+
+            <div className="form-field">
+              <label className="field-label">Password</label>
+              <input
+                className="field-input"
+                type="password"
+                required
+                value={signinPassword}
+                onChange={(event) => setSigninPassword(event.target.value)}
+                autoComplete="current-password"
+              />
+            </div>
+
+            <button className="btn btn-primary" disabled={loading}>
+              {loading ? "Signing in..." : "Sign in"}
+            </button>
+
+            {signinError && <p className="status-error">{signinError}</p>}
+            {signinStatus && <p className="status-note">{signinStatus}</p>}
+
+            <button
+              type="button"
+              className="btn btn-accent"
+              disabled={loading}
+              onClick={() => setDemoOpen((value) => !value)}
+            >
+              Try demo mode
+            </button>
+          </form>
+        )}
+
+        {tab === "forgot" && (
+          <form onSubmit={submitForgot} className="auth-form">
+            <h2 className="panel-title">Reset your password</h2>
+            <p className="panel-copy">
+              Enter the email on your account. If it exists, you'll get a
+              reset link by email — the link itself carries the secure token,
+              you don't need to copy anything.
+            </p>
+
+            <div className="form-field">
+              <label className="field-label">Email</label>
+              <input
+                className="field-input"
+                type="email"
+                required
+                value={forgotEmail}
+                onChange={(event) => setForgotEmail(event.target.value)}
+                autoComplete="email"
+              />
+            </div>
+
+            <button className="btn btn-primary" disabled={loading}>
+              {loading ? "Sending..." : "Send reset link"}
+            </button>
+
+            {forgotError && <p className="status-error">{forgotError}</p>}
+            {forgotStatus && <p className="status-note">{forgotStatus}</p>}
+          </form>
+        )}
+
+        {tab === "register" && regStage === "form" && (
+          <form onSubmit={submitRegisterForm} className="auth-form">
+            <h2 className="panel-title">Create account</h2>
+
+            <div className="form-field">
+              <label className="field-label">Full name</label>
+              <input
+                className="field-input"
+                type="text"
+                required
+                value={regForm.full_name}
+                onChange={updateRegField("full_name")}
+                autoComplete="name"
+              />
+              {regErrors.full_name && (
+                <p className="status-error">{regErrors.full_name}</p>
+              )}
+            </div>
+
+            <div className="form-field">
+              <label className="field-label">Organization name</label>
+              <input
+                className="field-input"
+                type="text"
+                required
+                value={regForm.org_name}
+                onChange={updateRegField("org_name")}
+                placeholder="Acme Inc."
+              />
+              {regErrors.org_name && (
+                <p className="status-error">{regErrors.org_name}</p>
+              )}
+            </div>
+
+            <div className="form-field">
+              <label className="field-label">Email</label>
+              <input
+                className="field-input"
+                type="email"
+                required
+                value={regForm.email}
+                onChange={updateRegField("email")}
+                autoComplete="email"
+              />
+              {regErrors.email && (
+                <p className="status-error">{regErrors.email}</p>
+              )}
+            </div>
+
+            <div className="form-field">
+              <label className="field-label">Password</label>
+              <input
+                className="field-input"
+                type="password"
+                required
+                value={regForm.password}
+                onChange={updateRegField("password")}
+                autoComplete="new-password"
+              />
+              <PasswordChecklist password={regForm.password} />
+              {regErrors.password && (
+                <p className="status-error">{regErrors.password}</p>
+              )}
+            </div>
+
+            <div className="form-field">
+              <label className="field-label">Confirm password</label>
+              <input
+                className="field-input"
+                type="password"
+                required
+                value={regForm.confirmPassword}
+                onChange={updateRegField("confirmPassword")}
+                autoComplete="new-password"
+              />
+              {regForm.confirmPassword.length > 0 &&
+                regForm.confirmPassword !== regForm.password && (
+                  <p className="status-error">Passwords do not match</p>
+                )}
+              {regErrors.confirmPassword && (
+                <p className="status-error">{regErrors.confirmPassword}</p>
+              )}
+            </div>
+
+            <button
+              className="btn btn-primary"
+              disabled={
+                loading ||
+                !isPasswordStrong(regForm.password) ||
+                regForm.password !== regForm.confirmPassword
+              }
+            >
+              {loading ? "Sending code..." : "Send verification code"}
+            </button>
+
+            {regStatus && <p className="status-note">{regStatus}</p>}
+            {regError && <p className="status-error">{regError}</p>}
+          </form>
+        )}
+
+        {tab === "register" && regStage === "otp" && (
+          <form onSubmit={submitRegisterOtp} className="auth-form">
+            <h2 className="panel-title">Enter verification code</h2>
+            <p className="panel-copy">
+              We emailed a 6-digit code to <strong>{regForm.email}</strong>.
+              {regOtpExpiresInMinutes != null && (
+                <> It expires in {regOtpExpiresInMinutes} minutes.</>
+              )}
+            </p>
+
+            {regDevOtp && (
+              <p
+                className="status-note"
+                style={{ fontFamily: "monospace", letterSpacing: 2 }}
+              >
+                Dev mode code: {regDevOtp}
+              </p>
+            )}
+
+            <div className="form-field">
+              <label className="field-label">Verification code</label>
+              <input
+                className="field-input otp-input"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+                value={regOtp}
+                onChange={(event) =>
+                  setRegOtp(event.target.value.replace(/\D/g, "").slice(0, 6))
+                }
+                autoComplete="one-time-code"
+                placeholder="123456"
+              />
+              {regErrors.otp && (
+                <p className="status-error">{regErrors.otp}</p>
+              )}
+            </div>
+
+            <button
+              className="btn btn-primary"
+              disabled={loading || regOtp.length !== 6}
+            >
+              {loading ? "Verifying..." : "Verify and create account"}
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-muted"
+              disabled={regResendCooldown > 0 || loading}
+              onClick={resendRegisterOtp}
+            >
+              {regResendCooldown > 0
+                ? `Resend in ${regResendCooldown}s`
+                : "Resend code"}
+            </button>
+
+            {regStatus && <p className="status-note">{regStatus}</p>}
+            {regError && <p className="status-error">{regError}</p>}
+
+            <p className="panel-copy">
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  setRegStage("form");
+                  setRegOtp("");
+                }}
+              >
+                ← Edit registration details
+              </button>
+            </p>
+          </form>
+        )}
+
+        {tab === "register" && regStage === "success" && (
+          <section className="auth-form">
+            <h2 className="panel-title">You're in! 🎉</h2>
+            <p className="panel-copy">
+              Welcome to System Pulse. Your account is verified and your free
+              organization{" "}
+              <strong>{regCreatedOrgName || regForm.org_name}</strong> is
+              ready to go.
+            </p>
+            <ul className="steps-list">
+              <li>
+                You're the <strong>owner</strong> of this organization.
+              </li>
+              <li>
+                Add <strong>unlimited systems</strong> to monitor.
+              </li>
+              <li>
+                Invite <strong>users</strong> with granular permission
+                toggles.
+              </li>
+            </ul>
+            <button
+              className="btn btn-primary"
+              onClick={() => navigate("/admin", { replace: true })}
+            >
+              Go to my dashboard
+            </button>
+          </section>
+        )}
+      </div>
 
       {demoOpen && (
         <div
@@ -313,6 +788,13 @@ export default function Login() {
               </button>
             ))}
           </div>
+          <p className="dev-quick-help" style={{ marginTop: 8 }}>
+            Or use{" "}
+            <Link to="/login" onClick={() => setTab("signin")}>
+              Sign in
+            </Link>{" "}
+            with your real account.
+          </p>
         </div>
       )}
 

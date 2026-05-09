@@ -1265,3 +1265,143 @@ select.field-input {
 .password-rule-label {
   white-space: nowrap;
 }
+
+/* ---- SaaS UI additions ---- */
+
+/* Tab strip used by Login (signin / forgot / signup) and the
+   AdminDashboard user-edit modal (System access | Permissions). */
+.auth-tab-strip {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-radius: 12px;
+}
+
+.auth-tab {
+  flex: 1;
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.auth-tab:hover {
+  color: currentColor;
+}
+
+.auth-tab.active {
+  background: var(--surface, #ffffff);
+  color: var(--success, #10b981);
+  box-shadow: 0 4px 14px -8px color-mix(in srgb, var(--success, #10b981) 60%, transparent);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Inline role pill used in the user table. */
+.role-pill {
+  display: inline-flex;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.role-pill.role-owner,
+.role-pill.role-superadmin {
+  background: color-mix(in srgb, var(--success, #10b981) 22%, transparent);
+  color: var(--success, #10b981);
+}
+
+.role-pill.role-admin {
+  background: color-mix(in srgb, #7d4eff 22%, transparent);
+  color: #7d4eff;
+}
+
+.role-pill.role-user,
+.role-pill.role-tester {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* Modal layout helpers. */
+.modal-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.checkbox-item.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* OTP input styling — center-aligned, big tracking, monospaced. */
+.otp-input {
+  letter-spacing: 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.05em;
+}
+
+/* Demo mode banner — purple accent, retains the green theme of the
+   rest of the UI. */
+.demo-banner {
+  border-color: #7d4eff !important;
+  background: color-mix(in srgb, #7d4eff 8%, transparent);
+}
+
+/* Four-column system action row (Trigger / Logs / Edit / Delete). */
+.system-actions-4 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+@media (min-width: 720px) {
+  .system-actions-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* Slightly polished system card: green top border accent. */
+.system-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.system-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--success, #10b981) 60%, transparent),
+    transparent 70%
+  );
+}

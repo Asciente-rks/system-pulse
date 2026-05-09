@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  assignSystemAccess,
+  changeUserRole,
   createSystem,
   deleteSystem,
   deleteUser,
@@ -10,9 +10,16 @@ import {
   inviteUser,
   listSystems,
   listUsers,
+  PERMISSION_KEYS,
+  PERMISSION_LABELS,
   triggerHealth,
+  updateSystem,
+  updateUserPermissions,
+  userCan,
+  type AuthRole,
   type SessionUser,
   type SystemSummary,
+  type UserPermissions,
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
 import AestheticSelect from "../components/AestheticSelect";
@@ -25,20 +32,22 @@ import {
 type AdminTab = "overview" | "systems" | "users";
 
 const USERS_PER_PAGE = 5;
+const POLL_INTERVAL_MS = 10_000;
+const FAST_POLL_INTERVAL_MS = 4_000;
 
-// Demo accounts can browse the entire admin surface but cannot
-// destroy data. Plain (non-demo) admins CAN delete inside their own
-// org now that the platform is multi-tenant.
 const DEMO_DISABLED_NOTE =
   "Demo mode is read-mostly. Sign up for a free account to delete data.";
 
-export default function AdminDashboard() {
-  const { user, isDemo } = useAuth();
+const PERMISSIONS_NEEDING_OWNER: Array<keyof UserPermissions> = [
+  "canDeleteUser",
+  "canDeleteSystem",
+  "canUpdateUser",
+];
 
-  // Real org admins delete inside their own org. Demo admins are
-  // blocked. Superadmin always allowed. The backend enforces the
-  // same rule independently.
-  const DELETION_DISABLED = !user || isDemo;
+type UserModalTab = "access" | "permissions";
+
+export default function AdminDashboard() {
+  const { user, isDemo, isOwner, can } = useAuth();
 
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [users, setUsers] = useState<SessionUser[]>([]);
@@ -47,12 +56,12 @@ export default function AdminDashboard() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Invite form
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
-  const [inviteRole, setInviteRole] = useState<"admin" | "user" | "tester">(
-    "user",
-  );
+  const [inviteRole, setInviteRole] = useState<AuthRole>("user");
 
+  // Create system form
   const [systemName, setSystemName] = useState("");
   const [systemUrl, setSystemUrl] = useState("");
   const [systemDeploymentMode, setSystemDeploymentMode] =
@@ -63,46 +72,79 @@ export default function AdminDashboard() {
     null,
   );
 
+  // Real-time polling state
   const [checkingUntilBySystem, setCheckingUntilBySystem] = useState<
     Record<string, number>
   >({});
   const [timeNow, setTimeNow] = useState(() => Date.now());
 
+  // User pagination
   const [userPage, setUserPage] = useState(1);
+
+  // User-edit modal
   const [editingUser, setEditingUser] = useState<SessionUser | null>(null);
+  const [userModalTab, setUserModalTab] = useState<UserModalTab>("access");
   const [userModalOpen, setUserModalOpen] = useState(false);
-  const [showPermissionEditor, setShowPermissionEditor] = useState(false);
   const [modalSystemIds, setModalSystemIds] = useState<string[]>([]);
   const [modalStatus, setModalStatus] = useState<
     "Active" | "Pending" | "Suspended"
   >("Active");
+  const [modalPermissions, setModalPermissions] = useState<UserPermissions>(
+    () => buildBlankPermissions(),
+  );
   const [userDeletePassword, setUserDeletePassword] = useState("");
   const [userDeleteConfirm, setUserDeleteConfirm] = useState("");
 
+  // System-delete modal
   const [deleteSystemTarget, setDeleteSystemTarget] =
     useState<SystemSummary | null>(null);
   const [systemDeletePassword, setSystemDeletePassword] = useState("");
   const [systemDeleteConfirm, setSystemDeleteConfirm] = useState("");
 
+  // System-edit modal
+  const [editingSystem, setEditingSystem] = useState<SystemSummary | null>(
+    null,
+  );
+  const [editSystemName, setEditSystemName] = useState("");
+  const [editSystemUrl, setEditSystemUrl] = useState("");
+  const [editSystemMode, setEditSystemMode] =
+    useState<DeploymentModeInput>("auto");
+
   const inviteRoleOptions = useMemo(() => {
     if (user?.role === "superadmin") {
       return ["admin", "user", "tester"] as const;
     }
-
+    if (isOwner) {
+      return ["admin", "user", "tester"] as const;
+    }
     return ["user", "tester"] as const;
-  }, [user?.role]);
+  }, [user?.role, isOwner]);
 
-  const totalUserPages = Math.max(1, Math.ceil(users.length / USERS_PER_PAGE));
+  const totalUserPages = Math.max(
+    1,
+    Math.ceil(users.length / USERS_PER_PAGE),
+  );
 
   const pagedUsers = useMemo(() => {
     const start = (userPage - 1) * USERS_PER_PAGE;
     return users.slice(start, start + USERS_PER_PAGE);
   }, [users, userPage]);
 
-  async function loadUsersAndSystems() {
-    setBusy("load");
-    setErrorMessage(null);
+  const hasPendingChecks = useMemo(
+    () =>
+      Object.values(checkingUntilBySystem).some((until) => until > timeNow),
+    [checkingUntilBySystem, timeNow],
+  );
 
+  const loadingRef = useRef(false);
+
+  async function loadUsersAndSystems(silent = false) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!silent) {
+      setBusy("load");
+      setErrorMessage(null);
+    }
     try {
       const [usersResponse, systemsResponse] = await Promise.all([
         listUsers(200),
@@ -112,15 +154,19 @@ export default function AdminDashboard() {
       setUsers(usersResponse.data?.users || []);
       setSystems(systemsResponse.data?.systems || []);
 
-      if (usersResponse._httpStatus >= 400) {
-        setErrorMessage(usersResponse.message || "Failed to load users");
-      }
-
-      if (systemsResponse._httpStatus >= 400) {
-        setErrorMessage(systemsResponse.message || "Failed to load systems");
+      if (!silent) {
+        if (usersResponse._httpStatus >= 400) {
+          setErrorMessage(usersResponse.message || "Failed to load users");
+        }
+        if (systemsResponse._httpStatus >= 400) {
+          setErrorMessage(
+            systemsResponse.message || "Failed to load systems",
+          );
+        }
       }
     } finally {
-      setBusy(null);
+      loadingRef.current = false;
+      if (!silent) setBusy(null);
     }
   }
 
@@ -128,16 +174,45 @@ export default function AdminDashboard() {
     void loadUsersAndSystems();
   }, []);
 
+  // Tick "timeNow" every second so the "checking..." indicators update.
   useEffect(() => {
     const timer = window.setInterval(() => setTimeNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  // Background polling. Runs at fast cadence while any system is in
+  // a "checking" window, slower otherwise. This is what makes Render
+  // wake-up status feel real-time without the user clicking Logs.
+  useEffect(() => {
+    const interval = hasPendingChecks ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+    const id = window.setInterval(() => {
+      void loadUsersAndSystems(true);
+    }, interval);
+    return () => window.clearInterval(id);
+  }, [hasPendingChecks]);
 
   useEffect(() => {
     if (userPage > totalUserPages) {
       setUserPage(totalUserPages);
     }
   }, [totalUserPages, userPage]);
+
+  // Auto-refresh logs while the logs panel is open.
+  useEffect(() => {
+    if (!logsSystemId) return;
+    const refresh = async () => {
+      try {
+        const response = await getSystemLogs(logsSystemId, 20);
+        if (response._httpStatus >= 400) return;
+        setLogsResult(response as unknown as Record<string, unknown>);
+      } catch {
+        /* ignore */
+      }
+    };
+    const interval = hasPendingChecks ? FAST_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+    const id = window.setInterval(refresh, interval);
+    return () => window.clearInterval(id);
+  }, [logsSystemId, hasPendingChecks]);
 
   async function handleInvite(event: React.FormEvent) {
     event.preventDefault();
@@ -209,22 +284,26 @@ export default function AdminDashboard() {
       )?.delayedRecheckSeconds;
       const delaySeconds = Number(delaySecondsRaw);
 
+      // Always set a checking window so polling kicks in. For non-
+      // Render systems we still need ~5 seconds because the worker
+      // fires asynchronously and DDB only reflects the result after
+      // it returns.
+      const totalDelay = Number.isFinite(delaySeconds) && delaySeconds > 0
+        ? delaySeconds + 5
+        : 8;
+
+      setCheckingUntilBySystem((current) => ({
+        ...current,
+        [systemId]: Date.now() + totalDelay * 1000,
+      }));
+
       if (Number.isFinite(delaySeconds) && delaySeconds > 0) {
-        setCheckingUntilBySystem((current) => ({
-          ...current,
-          [systemId]: Date.now() + delaySeconds * 1000,
-        }));
         setStatusMessage(
           `Health check queued for ${systemId}. Render wake-up recheck in ${delaySeconds}s.`,
         );
       } else {
-        setCheckingUntilBySystem((current) => {
-          const next = { ...current };
-          delete next[systemId];
-          return next;
-        });
         setStatusMessage(
-          `Health check queued for ${systemId}. Standard single-pass workflow.`,
+          `Health check queued for ${systemId}. Live status will refresh shortly.`,
         );
       }
 
@@ -268,23 +347,22 @@ export default function AdminDashboard() {
 
       if (latestLog) {
         setSystems((current) =>
-          current.map((system) => {
-            if (system.id !== systemId) {
-              return system;
-            }
-
-            return {
-              ...system,
-              status: normalizeHealthStatus(
-                latestLog.status,
-                latestLog.responseCode,
-              ),
-              lastChecked: latestLog.checkedAt || system.lastChecked,
-              lastResponseCode:
-                latestLog.responseCode ?? system.lastResponseCode,
-              responseTimeMs: latestLog.responseTimeMs ?? system.responseTimeMs,
-            };
-          }),
+          current.map((s) =>
+            s.id === systemId
+              ? {
+                  ...s,
+                  status: normalizeHealthStatus(
+                    latestLog.status,
+                    latestLog.responseCode,
+                  ),
+                  lastChecked: latestLog.checkedAt || s.lastChecked,
+                  lastResponseCode:
+                    latestLog.responseCode ?? s.lastResponseCode,
+                  responseTimeMs:
+                    latestLog.responseTimeMs ?? s.responseTimeMs,
+                }
+              : s,
+          ),
         );
       }
 
@@ -301,11 +379,13 @@ export default function AdminDashboard() {
     try {
       const response = await getUser(nextUser.id);
       const userData = response.data || nextUser;
-
       setEditingUser(userData);
       setModalSystemIds(userData.allowedSystemIds || []);
       setModalStatus(userData.status_);
-      setShowPermissionEditor(false);
+      setModalPermissions(
+        buildPermissions(userData.permissions, userData.role),
+      );
+      setUserModalTab("access");
       setUserDeletePassword("");
       setUserDeleteConfirm("");
       setUserModalOpen(true);
@@ -319,28 +399,32 @@ export default function AdminDashboard() {
       if (current.includes(systemId)) {
         return current.filter((item) => item !== systemId);
       }
-
       return [...current, systemId];
     });
   }
 
+  function togglePermission(key: keyof UserPermissions) {
+    setModalPermissions((current) => ({ ...current, [key]: !current[key] }));
+  }
+
   async function handleSaveUserSettings() {
-    if (!editingUser) {
-      return;
-    }
+    if (!editingUser) return;
 
     setBusy("save-user-settings");
     setErrorMessage(null);
 
     try {
-      const response = await assignSystemAccess({
+      const response = await updateUserPermissions({
         userId: editingUser.id,
         systemIds: modalSystemIds,
         status_: modalStatus,
+        permissions: modalPermissions,
       });
 
       if (response._httpStatus >= 400) {
-        setErrorMessage(String(response.message || "Failed to update user"));
+        setErrorMessage(
+          String(response.message || "Failed to update user"),
+        );
         return;
       }
 
@@ -354,10 +438,7 @@ export default function AdminDashboard() {
   }
 
   async function handleDeleteUser() {
-    if (!editingUser) {
-      return;
-    }
-
+    if (!editingUser) return;
     if (userDeleteConfirm !== "DELETE") {
       setErrorMessage("Type DELETE to confirm user deletion.");
       return;
@@ -368,12 +449,12 @@ export default function AdminDashboard() {
 
     try {
       const response = await deleteUser(editingUser.id, userDeletePassword);
-
       if (response._httpStatus >= 400) {
-        setErrorMessage(String(response.message || "Failed to delete user"));
+        setErrorMessage(
+          String(response.message || "Failed to delete user"),
+        );
         return;
       }
-
       setStatusMessage("User deleted");
       setUserModalOpen(false);
       setEditingUser(null);
@@ -383,11 +464,32 @@ export default function AdminDashboard() {
     }
   }
 
-  async function handleDeleteSystem() {
-    if (!deleteSystemTarget) {
-      return;
+  async function handlePromote(role: AuthRole) {
+    if (!editingUser) return;
+    setBusy("change-role");
+    setErrorMessage(null);
+    try {
+      const response = await changeUserRole({
+        userId: editingUser.id,
+        role,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Failed to change role"),
+        );
+        return;
+      }
+      setStatusMessage(`Role updated to ${role}`);
+      setUserModalOpen(false);
+      setEditingUser(null);
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
     }
+  }
 
+  async function handleDeleteSystem() {
+    if (!deleteSystemTarget) return;
     if (systemDeleteConfirm !== "DELETE") {
       setErrorMessage("Type DELETE to confirm system deletion.");
       return;
@@ -403,7 +505,9 @@ export default function AdminDashboard() {
       );
 
       if (response._httpStatus >= 400) {
-        setErrorMessage(String(response.message || "Failed to delete system"));
+        setErrorMessage(
+          String(response.message || "Failed to delete system"),
+        );
         return;
       }
 
@@ -417,10 +521,62 @@ export default function AdminDashboard() {
     }
   }
 
+  function openSystemEditor(system: SystemSummary) {
+    setEditingSystem(system);
+    setEditSystemName(system.name);
+    setEditSystemUrl(system.url);
+    setEditSystemMode((system.deploymentMode as DeploymentModeInput) || "auto");
+  }
+
+  async function handleSaveSystemEdit() {
+    if (!editingSystem) return;
+    setBusy("update-system");
+    setErrorMessage(null);
+
+    const payload: Parameters<typeof updateSystem>[1] = {};
+    if (editSystemName !== editingSystem.name) payload.name = editSystemName;
+    if (editSystemUrl !== editingSystem.url) payload.url = editSystemUrl;
+    if (
+      editSystemMode !==
+      ((editingSystem.deploymentMode as DeploymentModeInput) || "auto")
+    ) {
+      payload.deploymentMode = editSystemMode;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      setEditingSystem(null);
+      setBusy(null);
+      return;
+    }
+
+    try {
+      const response = await updateSystem(editingSystem.id, payload);
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Failed to update system"),
+        );
+        return;
+      }
+      setStatusMessage("System updated");
+      setEditingSystem(null);
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // Permission gates for the actor (the logged-in user).
+  const canInvite = can("canCreateUser");
+  const canCreateSystem = can("canCreateSystem");
+  const canDeleteSystem = can("canDeleteSystem") && !isDemo;
+  const canDeleteUser = can("canDeleteUser") && !isDemo;
+  const canUpdateSystemPerm = can("canUpdateSystem") && !isDemo;
+  const canUpdateUserPerm = can("canUpdateUser") && !isDemo;
+
   return (
     <div className="stack-lg">
       {isDemo && (
-        <section className="panel" style={{ borderColor: "#7d4eff" }}>
+        <section className="panel demo-banner">
           <p className="panel-title" style={{ marginBottom: 6 }}>
             🧪 Demo mode active
           </p>
@@ -434,11 +590,14 @@ export default function AdminDashboard() {
       <section className="panel panel-hero">
         <div>
           <h2 className="panel-title">
-            {user?.orgName ? `${user.orgName} — Admin Command Center` : "Admin Command Center"}
+            {user?.orgName
+              ? `${user.orgName} — Admin Command Center`
+              : "Admin Command Center"}
           </h2>
           <p className="panel-copy">
-            Manage users, systems, and health workflows with role-aware controls
-            and secure deletion safeguards.
+            {isOwner
+              ? "You're the owner of this organization. You can promote / demote members and grant any permission."
+              : "Manage users, systems, and health workflows with permission-aware controls."}
           </p>
         </div>
 
@@ -481,21 +640,17 @@ export default function AdminDashboard() {
             <article className="metric-card">
               <p className="metric-label">Render Mode Systems</p>
               <p className="metric-value">
-                {
-                  systems.filter((item) => item.deploymentMode === "render")
-                    .length
-                }
+                {systems.filter((item) => item.deploymentMode === "render")
+                  .length}
               </p>
             </article>
             <article className="metric-card">
               <p className="metric-label">Standard Mode Systems</p>
               <p className="metric-value">
-                {
-                  systems.filter(
-                    (item) =>
-                      (item.deploymentMode || "standard") === "standard",
-                  ).length
-                }
+                {systems.filter(
+                  (item) =>
+                    (item.deploymentMode || "standard") === "standard",
+                ).length}
               </p>
             </article>
           </div>
@@ -505,54 +660,62 @@ export default function AdminDashboard() {
       {activeTab === "systems" && (
         <section className="panel">
           <h3 className="panel-subtitle">System Operations</h3>
-          <form
-            onSubmit={handleCreateSystem}
-            className="form-grid form-grid-4col"
-          >
-            <div className="form-field">
-              <label className="field-label">System Name</label>
-              <input
-                className="field-input"
-                value={systemName}
-                onChange={(event) => setSystemName(event.target.value)}
-                required
-              />
-            </div>
 
-            <div className="form-field">
-              <label className="field-label">Production URL</label>
-              <input
-                className="field-input"
-                value={systemUrl}
-                onChange={(event) => setSystemUrl(event.target.value)}
-                required
-              />
-            </div>
+          {canCreateSystem ? (
+            <form
+              onSubmit={handleCreateSystem}
+              className="form-grid form-grid-4col"
+            >
+              <div className="form-field">
+                <label className="field-label">System Name</label>
+                <input
+                  className="field-input"
+                  value={systemName}
+                  onChange={(event) => setSystemName(event.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-field">
-              <label className="field-label">Workflow Mode</label>
-              <AestheticSelect
-                ariaLabel="Workflow Mode"
-                value={systemDeploymentMode}
-                onChange={(nextValue) => setSystemDeploymentMode(nextValue)}
-                options={[
-                  { value: "auto", label: "Auto detect from URL" },
-                  { value: "render", label: "Render cold-start mode" },
-                  { value: "standard", label: "Standard single-pass mode" },
-                ]}
-              />
-            </div>
+              <div className="form-field">
+                <label className="field-label">Production URL</label>
+                <input
+                  className="field-input"
+                  value={systemUrl}
+                  onChange={(event) => setSystemUrl(event.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-field form-action-field">
-              <label className="field-label">&nbsp;</label>
-              <button
-                className="btn btn-primary"
-                disabled={busy === "create-system"}
-              >
-                {busy === "create-system" ? "Creating..." : "Create System"}
-              </button>
-            </div>
-          </form>
+              <div className="form-field">
+                <label className="field-label">Workflow Mode</label>
+                <AestheticSelect
+                  ariaLabel="Workflow Mode"
+                  value={systemDeploymentMode}
+                  onChange={(nextValue) => setSystemDeploymentMode(nextValue)}
+                  options={[
+                    { value: "auto", label: "Auto detect from URL" },
+                    { value: "render", label: "Render cold-start mode" },
+                    { value: "standard", label: "Standard single-pass mode" },
+                  ]}
+                />
+              </div>
+
+              <div className="form-field form-action-field">
+                <label className="field-label">&nbsp;</label>
+                <button
+                  className="btn btn-primary"
+                  disabled={busy === "create-system"}
+                >
+                  {busy === "create-system" ? "Creating..." : "Create System"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="panel-copy compact-copy">
+              Your account doesn't have the canCreateSystem permission. Ask an
+              owner to grant it.
+            </p>
+          )}
 
           <div className="grid-cards">
             {systems.map((system) => {
@@ -570,14 +733,25 @@ export default function AdminDashboard() {
                       Workflow: {system.deploymentMode || "standard"}
                     </p>
                     <p className="panel-copy">Status: {status}</p>
+                    {system.lastChecked && (
+                      <p
+                        className="panel-copy"
+                        style={{ fontSize: "0.85em", opacity: 0.75 }}
+                      >
+                        Last checked:{" "}
+                        {new Date(system.lastChecked).toLocaleString()}
+                      </p>
+                    )}
                   </div>
 
-                  <div className="button-row system-actions system-actions-3">
+                  <div className="button-row system-actions system-actions-4">
                     <button
                       className="btn btn-success system-action-btn"
                       onClick={() => handleTrigger(system.id)}
                       disabled={
-                        busy === `trigger-${system.id}` || isChecking(system.id)
+                        busy === `trigger-${system.id}` ||
+                        isChecking(system.id) ||
+                        !can("canTriggerHealthChecks")
                       }
                     >
                       {busy === `trigger-${system.id}`
@@ -589,18 +763,38 @@ export default function AdminDashboard() {
                     <button
                       className="btn btn-warning system-action-btn"
                       onClick={() => handleLoadLogs(system.id)}
-                      disabled={busy === `logs-${system.id}`}
+                      disabled={
+                        busy === `logs-${system.id}` || !can("canViewLogs")
+                      }
                     >
                       {busy === `logs-${system.id}` ? "Loading..." : "Logs"}
                     </button>
                     <button
+                      className="btn btn-surface system-action-btn"
+                      onClick={() => openSystemEditor(system)}
+                      disabled={!canUpdateSystemPerm}
+                      title={
+                        !canUpdateSystemPerm && isDemo
+                          ? DEMO_DISABLED_NOTE
+                          : !canUpdateSystemPerm
+                            ? "You need canUpdateSystem permission to edit"
+                            : undefined
+                      }
+                    >
+                      Edit
+                    </button>
+                    <button
                       className="btn btn-danger system-action-btn"
                       onClick={() =>
-                        !DELETION_DISABLED && setDeleteSystemTarget(system)
+                        canDeleteSystem && setDeleteSystemTarget(system)
                       }
-                      disabled={DELETION_DISABLED}
+                      disabled={!canDeleteSystem}
                       title={
-                        DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
+                        !canDeleteSystem && isDemo
+                          ? DEMO_DISABLED_NOTE
+                          : !canDeleteSystem
+                            ? "You need canDeleteSystem permission to delete"
+                            : undefined
                       }
                     >
                       Delete
@@ -613,7 +807,9 @@ export default function AdminDashboard() {
 
           {logsResult && (
             <div className="result-wrap">
-              <p className="field-label">Logs for {logsSystemId}</p>
+              <p className="field-label">
+                Logs for {logsSystemId} (auto-refreshing)
+              </p>
               <pre className="result-box">
                 {JSON.stringify(logsResult, null, 2)}
               </pre>
@@ -626,48 +822,59 @@ export default function AdminDashboard() {
         <section className="panel">
           <h3 className="panel-subtitle">User Management</h3>
 
-          <form onSubmit={handleInvite} className="form-grid form-grid-4col">
-            <div className="form-field">
-              <label className="field-label">Email</label>
-              <input
-                className="field-input"
-                type="email"
-                value={inviteEmail}
-                onChange={(event) => setInviteEmail(event.target.value)}
-                required
-              />
-            </div>
+          {canInvite ? (
+            <form onSubmit={handleInvite} className="form-grid form-grid-4col">
+              <div className="form-field">
+                <label className="field-label">Email</label>
+                <input
+                  className="field-input"
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-field">
-              <label className="field-label">Full Name</label>
-              <input
-                className="field-input"
-                value={inviteName}
-                onChange={(event) => setInviteName(event.target.value)}
-                required
-              />
-            </div>
+              <div className="form-field">
+                <label className="field-label">Full Name</label>
+                <input
+                  className="field-input"
+                  value={inviteName}
+                  onChange={(event) => setInviteName(event.target.value)}
+                  required
+                />
+              </div>
 
-            <div className="form-field">
-              <label className="field-label">Role</label>
-              <AestheticSelect
-                ariaLabel="Role"
-                value={inviteRole}
-                onChange={(nextValue) => setInviteRole(nextValue)}
-                options={inviteRoleOptions.map((role) => ({
-                  value: role,
-                  label: role,
-                }))}
-              />
-            </div>
+              <div className="form-field">
+                <label className="field-label">Role</label>
+                <AestheticSelect
+                  ariaLabel="Role"
+                  value={inviteRole}
+                  onChange={(nextValue) =>
+                    setInviteRole(nextValue as AuthRole)
+                  }
+                  options={inviteRoleOptions.map((role) => ({
+                    value: role,
+                    label: role,
+                  }))}
+                />
+              </div>
 
-            <div className="form-field form-action-field">
-              <label className="field-label">&nbsp;</label>
-              <button className="btn btn-primary" disabled={busy === "invite"}>
-                {busy === "invite" ? "Sending..." : "Send Invite"}
-              </button>
-            </div>
-          </form>
+              <div className="form-field form-action-field">
+                <label className="field-label">&nbsp;</label>
+                <button
+                  className="btn btn-primary"
+                  disabled={busy === "invite"}
+                >
+                  {busy === "invite" ? "Sending..." : "Send Invite"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="panel-copy compact-copy">
+              Your account doesn't have the canCreateUser permission.
+            </p>
+          )}
 
           <div className="table-wrap">
             <table className="data-table">
@@ -685,12 +892,24 @@ export default function AdminDashboard() {
                   <tr key={entry.id}>
                     <td>{entry.full_name}</td>
                     <td>{entry.email}</td>
-                    <td>{entry.role}</td>
+                    <td>
+                      <span className={`role-pill role-${entry.role}`}>
+                        {entry.role}
+                      </span>
+                    </td>
                     <td>{entry.status_}</td>
                     <td>
                       <button
                         className="btn btn-surface"
                         onClick={() => openUserSettings(entry)}
+                        disabled={!canUpdateUserPerm}
+                        title={
+                          !canUpdateUserPerm && isDemo
+                            ? DEMO_DISABLED_NOTE
+                            : !canUpdateUserPerm
+                              ? "You need canUpdateUser permission"
+                              : undefined
+                        }
                       >
                         Settings
                       </button>
@@ -725,86 +944,183 @@ export default function AdminDashboard() {
         </section>
       )}
 
+      {/* User edit modal */}
       {userModalOpen && editingUser && (
-        <div className="modal-overlay">
-          <div className="modal-card user-settings-modal">
-            <h3 className="panel-subtitle">User Settings</h3>
-            <p className="panel-copy compact-copy">
-              {editingUser.full_name} ({editingUser.role})
-            </p>
-
-            <div className="modal-form-grid">
-              <div className="form-field">
-                <label className="field-label">Status</label>
-                <AestheticSelect
-                  ariaLabel="Status"
-                  value={modalStatus}
-                  onChange={(nextValue) => setModalStatus(nextValue)}
-                  options={[
-                    { value: "Active", label: "Active" },
-                    { value: "Pending", label: "Pending" },
-                    { value: "Suspended", label: "Suspended" },
-                  ]}
-                />
+        <div className="modal-overlay" onClick={() => setUserModalOpen(false)}>
+          <div
+            className="modal-card user-settings-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <div>
+                <h3 className="panel-subtitle">{editingUser.full_name}</h3>
+                <p className="panel-copy compact-copy">
+                  <span className={`role-pill role-${editingUser.role}`}>
+                    {editingUser.role}
+                  </span>{" "}
+                  · {editingUser.email}
+                </p>
               </div>
+              <button
+                className="btn btn-muted"
+                onClick={() => setUserModalOpen(false)}
+              >
+                Close
+              </button>
+            </header>
 
-              <div className="form-field form-action-field">
-                <label className="field-label">Permissions</label>
-                <button
-                  className="btn btn-surface"
-                  onClick={() => setShowPermissionEditor((current) => !current)}
-                >
-                  {showPermissionEditor
-                    ? "Hide System Trigger Permissions"
-                    : "Edit System Trigger Permissions"}
-                </button>
-              </div>
+            <div className="auth-tab-strip" role="tablist">
+              <button
+                type="button"
+                className={`auth-tab ${userModalTab === "access" ? "active" : ""}`}
+                onClick={() => setUserModalTab("access")}
+              >
+                System access
+              </button>
+              <button
+                type="button"
+                className={`auth-tab ${userModalTab === "permissions" ? "active" : ""}`}
+                onClick={() => setUserModalTab("permissions")}
+              >
+                Permissions
+              </button>
             </div>
 
-            {showPermissionEditor && (
-              <div className="checkbox-grid permission-grid">
-                {systems.map((system) => (
-                  <label key={system.id} className="checkbox-item">
-                    <input
-                      type="checkbox"
-                      checked={modalSystemIds.includes(system.id)}
-                      onChange={() => toggleSystemForModal(system.id)}
-                    />
-                    <span>{system.name}</span>
-                  </label>
-                ))}
+            {userModalTab === "access" && (
+              <div className="modal-body">
+                <div className="form-field">
+                  <label className="field-label">Account status</label>
+                  <AestheticSelect
+                    ariaLabel="Status"
+                    value={modalStatus}
+                    onChange={(nextValue) => setModalStatus(nextValue)}
+                    options={[
+                      { value: "Active", label: "Active" },
+                      { value: "Pending", label: "Pending" },
+                      { value: "Suspended", label: "Suspended" },
+                    ]}
+                  />
+                </div>
+
+                <p className="field-label" style={{ marginTop: 12 }}>
+                  Systems this user can trigger
+                </p>
+                {systems.length === 0 ? (
+                  <p className="panel-copy compact-copy">
+                    No systems registered yet.
+                  </p>
+                ) : (
+                  <div className="checkbox-grid permission-grid">
+                    {systems.map((system) => (
+                      <label key={system.id} className="checkbox-item">
+                        <input
+                          type="checkbox"
+                          checked={modalSystemIds.includes(system.id)}
+                          onChange={() => toggleSystemForModal(system.id)}
+                        />
+                        <span>{system.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            <div className="button-row modal-actions">
+            {userModalTab === "permissions" && (
+              <div className="modal-body">
+                <p className="panel-copy compact-copy">
+                  Toggle the actions this user can perform. Only the org
+                  owner can grant permissions marked with ⚡.
+                </p>
+
+                <div className="checkbox-grid permission-grid">
+                  {PERMISSION_KEYS.map((key) => {
+                    const ownerOnly =
+                      PERMISSIONS_NEEDING_OWNER.includes(key);
+                    const disabled = ownerOnly && !isOwner;
+                    return (
+                      <label
+                        key={key}
+                        className={`checkbox-item ${disabled ? "is-disabled" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={modalPermissions[key]}
+                          onChange={() => togglePermission(key)}
+                          disabled={disabled}
+                        />
+                        <span>
+                          {ownerOnly && <span aria-hidden> ⚡ </span>}
+                          {PERMISSION_LABELS[key]}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {isOwner && (
+                  <div
+                    className="modal-form-grid"
+                    style={{ marginTop: 16 }}
+                  >
+                    <div className="form-field">
+                      <label className="field-label">Change role</label>
+                      <div className="button-row">
+                        {(["admin", "user", "tester"] as AuthRole[]).map(
+                          (role) => (
+                            <button
+                              key={role}
+                              type="button"
+                              className={`btn ${editingUser.role === role ? "btn-primary" : "btn-muted"}`}
+                              disabled={
+                                busy === "change-role" ||
+                                editingUser.role === role ||
+                                editingUser.id === user?.id
+                              }
+                              onClick={() => handlePromote(role)}
+                            >
+                              {editingUser.role === role
+                                ? `Currently ${role}`
+                                : `Set as ${role}`}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      <p className="panel-copy compact-copy">
+                        Changing role resets the permissions to that role's
+                        defaults.
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <footer className="modal-actions">
               <button
                 className="btn btn-primary"
                 onClick={handleSaveUserSettings}
                 disabled={busy === "save-user-settings"}
               >
-                {busy === "save-user-settings" ? "Saving..." : "Save Settings"}
+                {busy === "save-user-settings"
+                  ? "Saving..."
+                  : "Save changes"}
               </button>
-              <button
-                className="btn btn-muted"
-                onClick={() => {
-                  setUserModalOpen(false);
-                  setEditingUser(null);
-                }}
-              >
-                Close
-              </button>
-            </div>
+            </footer>
 
             <div className="danger-zone">
-              <p className="danger-title">Danger Zone</p>
+              <p className="danger-title">Danger zone</p>
               <p className="panel-copy compact-copy">
-                Deleting a user is permanent. Type DELETE and your admin
-                password.
+                Deleting a user is permanent. Type DELETE and your password
+                to confirm.
               </p>
 
-              {DELETION_DISABLED && (
+              {!canDeleteUser && (
                 <p className="deletion-locked-note" role="status">
-                  🔒 {DEMO_DISABLED_NOTE}
+                  🔒{" "}
+                  {isDemo
+                    ? DEMO_DISABLED_NOTE
+                    : "Your account doesn't have the canDeleteUser permission."}
                 </p>
               )}
 
@@ -817,12 +1133,11 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setUserDeleteConfirm(event.target.value)
                     }
-                    disabled={DELETION_DISABLED}
+                    disabled={!canDeleteUser}
                   />
                 </div>
-
                 <div className="form-field">
-                  <label className="field-label">Your Password</label>
+                  <label className="field-label">Your password</label>
                   <input
                     className="field-input"
                     type="password"
@@ -830,7 +1145,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setUserDeletePassword(event.target.value)
                     }
-                    disabled={DELETION_DISABLED}
+                    disabled={!canDeleteUser}
                   />
                 </div>
               </div>
@@ -838,30 +1153,107 @@ export default function AdminDashboard() {
               <button
                 className="btn btn-danger"
                 onClick={handleDeleteUser}
-                disabled={DELETION_DISABLED || busy === "delete-user"}
-                title={
-                  DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
-                }
+                disabled={!canDeleteUser || busy === "delete-user"}
               >
-                {busy === "delete-user" ? "Deleting..." : "Delete User"}
+                {busy === "delete-user" ? "Deleting..." : "Delete user"}
               </button>
             </div>
           </div>
         </div>
       )}
 
+      {/* System edit modal */}
+      {editingSystem && (
+        <div className="modal-overlay" onClick={() => setEditingSystem(null)}>
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <h3 className="panel-subtitle">Edit system</h3>
+              <button
+                className="btn btn-muted"
+                onClick={() => setEditingSystem(null)}
+              >
+                Close
+              </button>
+            </header>
+
+            <div className="modal-body">
+              <div className="form-field">
+                <label className="field-label">Name</label>
+                <input
+                  className="field-input"
+                  value={editSystemName}
+                  onChange={(event) => setEditSystemName(event.target.value)}
+                />
+              </div>
+
+              <div className="form-field">
+                <label className="field-label">Production URL</label>
+                <input
+                  className="field-input"
+                  value={editSystemUrl}
+                  onChange={(event) => setEditSystemUrl(event.target.value)}
+                />
+              </div>
+
+              <div className="form-field">
+                <label className="field-label">Workflow mode</label>
+                <AestheticSelect
+                  ariaLabel="Workflow Mode"
+                  value={editSystemMode}
+                  onChange={(nextValue) => setEditSystemMode(nextValue)}
+                  options={[
+                    { value: "auto", label: "Auto detect from URL" },
+                    { value: "render", label: "Render cold-start mode" },
+                    { value: "standard", label: "Standard single-pass mode" },
+                  ]}
+                />
+              </div>
+            </div>
+
+            <footer className="modal-actions">
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveSystemEdit}
+                disabled={busy === "update-system"}
+              >
+                {busy === "update-system" ? "Saving..." : "Save changes"}
+              </button>
+              <button
+                className="btn btn-muted"
+                onClick={() => setEditingSystem(null)}
+              >
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* System delete confirm modal */}
       {deleteSystemTarget && (
-        <div className="modal-overlay">
-          <div className="modal-card">
-            <h3 className="panel-subtitle">Delete System</h3>
+        <div
+          className="modal-overlay"
+          onClick={() => setDeleteSystemTarget(null)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3 className="panel-subtitle">Delete system</h3>
             <p className="panel-copy compact-copy">
-              This will remove {deleteSystemTarget.name}, its logs, and all user
-              access mappings.
+              This will remove {deleteSystemTarget.name}, its logs, and all
+              user access mappings.
             </p>
 
-            {DELETION_DISABLED && (
+            {!canDeleteSystem && (
               <p className="deletion-locked-note" role="status">
-                🔒 {DEMO_DISABLED_NOTE}
+                🔒{" "}
+                {isDemo
+                  ? DEMO_DISABLED_NOTE
+                  : "Your account doesn't have the canDeleteSystem permission."}
               </p>
             )}
 
@@ -870,13 +1262,15 @@ export default function AdminDashboard() {
               <input
                 className="field-input"
                 value={systemDeleteConfirm}
-                onChange={(event) => setSystemDeleteConfirm(event.target.value)}
-                disabled={DELETION_DISABLED}
+                onChange={(event) =>
+                  setSystemDeleteConfirm(event.target.value)
+                }
+                disabled={!canDeleteSystem}
               />
             </div>
 
             <div className="form-field">
-              <label className="field-label">Your Password</label>
+              <label className="field-label">Your password</label>
               <input
                 className="field-input"
                 type="password"
@@ -884,20 +1278,17 @@ export default function AdminDashboard() {
                 onChange={(event) =>
                   setSystemDeletePassword(event.target.value)
                 }
-                disabled={DELETION_DISABLED}
+                disabled={!canDeleteSystem}
               />
             </div>
 
-            <div className="button-row">
+            <div className="modal-actions">
               <button
                 className="btn btn-danger"
                 onClick={handleDeleteSystem}
-                disabled={DELETION_DISABLED || busy === "delete-system"}
-                title={
-                  DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
-                }
+                disabled={!canDeleteSystem || busy === "delete-system"}
               >
-                {busy === "delete-system" ? "Deleting..." : "Delete System"}
+                {busy === "delete-system" ? "Deleting..." : "Delete system"}
               </button>
               <button
                 className="btn btn-muted"
@@ -915,4 +1306,55 @@ export default function AdminDashboard() {
       )}
     </div>
   );
+}
+
+// ----------------- helpers -----------------
+
+function buildBlankPermissions(): UserPermissions {
+  return {
+    canCreateUser: false,
+    canDeleteUser: false,
+    canUpdateUser: false,
+    canCreateSystem: false,
+    canDeleteSystem: false,
+    canUpdateSystem: false,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  };
+}
+
+function buildPermissions(
+  source: UserPermissions | undefined,
+  role: AuthRole,
+): UserPermissions {
+  const blank = buildBlankPermissions();
+  if (source) {
+    return { ...blank, ...source };
+  }
+  // Fall back to role defaults if nothing is stored.
+  if (role === "owner" || role === "superadmin") {
+    return {
+      canCreateUser: true,
+      canDeleteUser: true,
+      canUpdateUser: true,
+      canCreateSystem: true,
+      canDeleteSystem: true,
+      canUpdateSystem: true,
+      canTriggerHealthChecks: true,
+      canViewLogs: true,
+    };
+  }
+  if (role === "admin") {
+    return {
+      canCreateUser: true,
+      canDeleteUser: false,
+      canUpdateUser: true,
+      canCreateSystem: true,
+      canDeleteSystem: false,
+      canUpdateSystem: true,
+      canTriggerHealthChecks: true,
+      canViewLogs: true,
+    };
+  }
+  return blank;
 }

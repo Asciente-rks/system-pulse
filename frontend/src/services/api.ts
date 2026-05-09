@@ -2,9 +2,100 @@ const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/g, "") ||
   "http://localhost:3000/dev";
 
-export type AuthRole = "superadmin" | "admin" | "user" | "tester";
+export type AuthRole =
+  | "superadmin"
+  | "owner"
+  | "admin"
+  | "user"
+  | "tester";
 export type DeploymentMode = "render" | "standard";
 export type DeploymentModeInput = DeploymentMode | "auto";
+
+export interface UserPermissions {
+  canCreateUser: boolean;
+  canDeleteUser: boolean;
+  canUpdateUser: boolean;
+  canCreateSystem: boolean;
+  canDeleteSystem: boolean;
+  canUpdateSystem: boolean;
+  canTriggerHealthChecks: boolean;
+  canViewLogs: boolean;
+}
+
+export const PERMISSION_KEYS: Array<keyof UserPermissions> = [
+  "canCreateUser",
+  "canDeleteUser",
+  "canUpdateUser",
+  "canCreateSystem",
+  "canDeleteSystem",
+  "canUpdateSystem",
+  "canTriggerHealthChecks",
+  "canViewLogs",
+];
+
+export const PERMISSION_LABELS: Record<keyof UserPermissions, string> = {
+  canCreateUser: "Invite users",
+  canDeleteUser: "Delete users",
+  canUpdateUser: "Edit user permissions",
+  canCreateSystem: "Add systems",
+  canDeleteSystem: "Delete systems",
+  canUpdateSystem: "Edit systems",
+  canTriggerHealthChecks: "Trigger health checks",
+  canViewLogs: "View health logs",
+};
+
+export const DEFAULT_PERMISSIONS_BY_ROLE: Record<AuthRole, UserPermissions> = {
+  superadmin: {
+    canCreateUser: true,
+    canDeleteUser: true,
+    canUpdateUser: true,
+    canCreateSystem: true,
+    canDeleteSystem: true,
+    canUpdateSystem: true,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  },
+  owner: {
+    canCreateUser: true,
+    canDeleteUser: true,
+    canUpdateUser: true,
+    canCreateSystem: true,
+    canDeleteSystem: true,
+    canUpdateSystem: true,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  },
+  admin: {
+    canCreateUser: true,
+    canDeleteUser: false,
+    canUpdateUser: true,
+    canCreateSystem: true,
+    canDeleteSystem: false,
+    canUpdateSystem: true,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  },
+  user: {
+    canCreateUser: false,
+    canDeleteUser: false,
+    canUpdateUser: false,
+    canCreateSystem: false,
+    canDeleteSystem: false,
+    canUpdateSystem: false,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  },
+  tester: {
+    canCreateUser: false,
+    canDeleteUser: false,
+    canUpdateUser: false,
+    canCreateSystem: false,
+    canDeleteSystem: false,
+    canUpdateSystem: false,
+    canTriggerHealthChecks: true,
+    canViewLogs: true,
+  },
+};
 
 export interface SessionUser {
   id: string;
@@ -13,14 +104,11 @@ export interface SessionUser {
   role: AuthRole;
   status_: "Active" | "Pending" | "Suspended";
   allowedSystemIds: string[];
-  /** Tenant the session belongs to. */
   orgId?: string;
-  /** Display label for the org (returned by login/register/demo). */
   orgName?: string;
-  /** True when this session is a throwaway demo. */
   demoMode?: boolean;
-  /** Demo session expiry (epoch seconds). */
   demoExpiresAt?: number;
+  permissions?: UserPermissions;
 }
 
 export interface SystemSummary {
@@ -105,7 +193,8 @@ export function getApiBaseUrl() {
 export async function inviteUser(payload: {
   email: string;
   full_name: string;
-  role: "superadmin" | "admin" | "user" | "tester";
+  role: AuthRole;
+  permissions?: Partial<UserPermissions>;
 }) {
   return request<Record<string, unknown>>("/users/invite", {
     method: "POST",
@@ -135,6 +224,23 @@ export async function createSystem(payload: {
   });
 }
 
+export async function updateSystem(
+  systemId: string,
+  payload: {
+    name?: string;
+    url?: string;
+    deploymentMode?: DeploymentModeInput;
+  },
+) {
+  return request<Record<string, unknown>>(
+    `/systems/${encodeURIComponent(systemId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export async function assignSystemAccess(payload: {
   userId: string;
   systemIds: string[];
@@ -149,6 +255,38 @@ export async function assignSystemAccess(payload: {
         systemIds: payload.systemIds,
         status_: payload.status_,
       }),
+    },
+  );
+}
+
+export async function updateUserPermissions(payload: {
+  userId: string;
+  systemIds?: string[];
+  status_?: "Active" | "Pending" | "Suspended";
+  permissions?: Partial<UserPermissions>;
+}) {
+  const body: Record<string, unknown> = {};
+  if (payload.systemIds !== undefined) body.systemIds = payload.systemIds;
+  if (payload.status_ !== undefined) body.status_ = payload.status_;
+  if (payload.permissions !== undefined) body.permissions = payload.permissions;
+  return request<Record<string, unknown>>(
+    `/users/${encodeURIComponent(payload.userId)}/permissions`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function changeUserRole(payload: {
+  userId: string;
+  role: AuthRole;
+}) {
+  return request<Record<string, unknown>>(
+    `/users/${encodeURIComponent(payload.userId)}/role`,
+    {
+      method: "POST",
+      body: JSON.stringify({ role: payload.role }),
     },
   );
 }
@@ -300,4 +438,35 @@ export async function startDemo(payload: {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+// ---- Permission helpers ----
+
+export function resolveSessionPermissions(
+  user: SessionUser | null | undefined,
+): UserPermissions {
+  if (!user) {
+    return {
+      canCreateUser: false,
+      canDeleteUser: false,
+      canUpdateUser: false,
+      canCreateSystem: false,
+      canDeleteSystem: false,
+      canUpdateSystem: false,
+      canTriggerHealthChecks: false,
+      canViewLogs: false,
+    };
+  }
+  if (user.role === "owner" || user.role === "superadmin") {
+    return DEFAULT_PERMISSIONS_BY_ROLE[user.role];
+  }
+  const defaults = DEFAULT_PERMISSIONS_BY_ROLE[user.role] || DEFAULT_PERMISSIONS_BY_ROLE.user;
+  return { ...defaults, ...(user.permissions || {}) };
+}
+
+export function userCan(
+  user: SessionUser | null | undefined,
+  key: keyof UserPermissions,
+): boolean {
+  return resolveSessionPermissions(user)[key] === true;
 }

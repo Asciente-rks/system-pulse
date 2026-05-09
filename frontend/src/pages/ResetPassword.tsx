@@ -16,7 +16,6 @@ export default function ResetPassword() {
     return params.get("token") || "";
   }, []);
 
-  const [token, setToken] = useState(queryToken);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -28,14 +27,26 @@ export default function ResetPassword() {
     signOut();
   }, [signOut]);
 
+  // Token is taken straight from the URL the email links to. We
+  // never show or store it in the UI — that prevents shoulder-surf
+  // capture and stops users copy-pasting it into the wrong place.
+  const tokenMissing = queryToken.length === 0;
+
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     setErrorMessage(null);
     setStatusMessage(null);
 
+    if (tokenMissing) {
+      setErrorMessage(
+        "Reset link is missing its token. Open the link from your email again.",
+      );
+      return;
+    }
+
     try {
       await setupPasswordSchema.validate(
-        { token, password, confirmPassword },
+        { token: queryToken, password, confirmPassword },
         { abortEarly: false, stripUnknown: true },
       );
       setErrors({});
@@ -46,7 +57,11 @@ export default function ResetPassword() {
 
     setLoading(true);
     try {
-      const response = await resetPassword(token, password, confirmPassword);
+      const response = await resetPassword(
+        queryToken,
+        password,
+        confirmPassword,
+      );
 
       if (response._httpStatus >= 400) {
         setErrorMessage(response.message || "Reset failed");
@@ -63,7 +78,7 @@ export default function ResetPassword() {
   }
 
   const canSubmit =
-    token.length > 0 &&
+    !tokenMissing &&
     isPasswordStrong(password) &&
     password === confirmPassword;
 
@@ -73,26 +88,21 @@ export default function ResetPassword() {
         <p className="auth-kicker">System Pulse</p>
         <h1 className="auth-title">Reset password</h1>
         <p className="auth-copy">
-          Use your reset token to set a new password before eligibility
-          expires.
+          Set a new password before the reset link expires. The token in your
+          email link is consumed automatically — you don't have to copy it
+          anywhere.
         </p>
       </div>
 
       <form className="auth-card" onSubmit={onSubmit}>
         <h2 className="panel-title">Set new password</h2>
 
-        <div className="form-field">
-          <label className="field-label">Reset token</label>
-          <input
-            className="field-input"
-            required
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {errors.token && <p className="status-error">{errors.token}</p>}
-        </div>
+        {tokenMissing && (
+          <div className="status-error" role="alert">
+            This page expects a token in the URL. Please open the link from
+            your password-reset email.
+          </div>
+        )}
 
         <div className="form-field">
           <label className="field-label">New password</label>
@@ -103,6 +113,7 @@ export default function ResetPassword() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             autoComplete="new-password"
+            disabled={tokenMissing}
           />
           <PasswordChecklist password={password} />
           {errors.password && (
@@ -119,6 +130,7 @@ export default function ResetPassword() {
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
             autoComplete="new-password"
+            disabled={tokenMissing}
           />
           {confirmPassword.length > 0 && confirmPassword !== password && (
             <p className="status-error">Passwords do not match</p>

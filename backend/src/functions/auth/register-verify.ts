@@ -10,6 +10,7 @@ import { createOrganizationService } from "../../services/organization-service.j
 import { createUserService } from "../../services/user-service.js";
 import { sendWelcomeEmail } from "../../services/email-service.js";
 import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
+import { resolvePermissions } from "../../types/user.js";
 
 interface VerifyBody {
   email: string;
@@ -118,7 +119,7 @@ export const registerVerify = async (
       ownerId: userId,
     });
 
-    const user = await userService.createActiveAdmin({
+    const user = await userService.createActiveOwner({
       email: pending.email,
       full_name: pending.full_name,
       passwordHash: pending.passwordHash,
@@ -157,6 +158,7 @@ export const registerVerify = async (
             allowedSystemIds: user.allowedSystemIds || [],
             orgId: org.id,
             orgName: org.name,
+            permissions: resolvePermissions(user as any),
           },
           org: {
             id: org.id,

@@ -14,7 +14,6 @@ export default function AcceptInvite() {
     return params.get("token") || "";
   }, []);
 
-  const [token, setToken] = useState(queryToken);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -22,14 +21,25 @@ export default function AcceptInvite() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Token comes from the URL the invite email links to. Never shown
+  // or copy-pasted by the user — keeps it off-screen, off-clipboard.
+  const tokenMissing = queryToken.length === 0;
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setStatusMessage(null);
     setErrorMessage(null);
 
+    if (tokenMissing) {
+      setErrorMessage(
+        "Invite link is missing its token. Open the link from your invitation email again.",
+      );
+      return;
+    }
+
     try {
       await setupPasswordSchema.validate(
-        { token, password, confirmPassword },
+        { token: queryToken, password, confirmPassword },
         { abortEarly: false, stripUnknown: true },
       );
       setErrors({});
@@ -40,7 +50,11 @@ export default function AcceptInvite() {
 
     setSubmitting(true);
     try {
-      const response = await acceptInvite(token, password, confirmPassword);
+      const response = await acceptInvite(
+        queryToken,
+        password,
+        confirmPassword,
+      );
 
       if (response._httpStatus >= 400) {
         setErrorMessage(
@@ -61,7 +75,7 @@ export default function AcceptInvite() {
   }
 
   const canSubmit =
-    token.length > 0 &&
+    !tokenMissing &&
     isPasswordStrong(password) &&
     password === confirmPassword;
 
@@ -71,26 +85,20 @@ export default function AcceptInvite() {
         <p className="auth-kicker">System Pulse</p>
         <h1 className="auth-title">Accept invitation</h1>
         <p className="auth-copy">
-          Use your invite token to set your account password and activate
-          access.
+          Set your account password to activate access. The invitation token
+          in your email link is consumed automatically.
         </p>
       </div>
 
       <form className="auth-card" onSubmit={submit}>
         <h2 className="panel-title">Set your password</h2>
 
-        <div className="form-field">
-          <label className="field-label">Invite token</label>
-          <input
-            className="field-input"
-            required
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          {errors.token && <p className="status-error">{errors.token}</p>}
-        </div>
+        {tokenMissing && (
+          <div className="status-error" role="alert">
+            This page expects an invite token in the URL. Please open the
+            link from your invitation email.
+          </div>
+        )}
 
         <div className="form-field">
           <label className="field-label">Password</label>
@@ -101,6 +109,7 @@ export default function AcceptInvite() {
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             autoComplete="new-password"
+            disabled={tokenMissing}
           />
           <PasswordChecklist password={password} />
           {errors.password && (
@@ -117,6 +126,7 @@ export default function AcceptInvite() {
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}
             autoComplete="new-password"
+            disabled={tokenMissing}
           />
           {confirmPassword.length > 0 && confirmPassword !== password && (
             <p className="status-error">Passwords do not match</p>

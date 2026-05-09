@@ -1,10 +1,18 @@
 import React, { createContext, useContext, useMemo, useState } from "react";
-import type { SessionUser } from "../services/api";
+import {
+  resolveSessionPermissions,
+  userCan,
+  type SessionUser,
+  type UserPermissions,
+} from "../services/api";
 
 interface AuthContextValue {
   user: SessionUser | null;
   isAuthenticated: boolean;
   isDemo: boolean;
+  isOwner: boolean;
+  permissions: UserPermissions;
+  can: (key: keyof UserPermissions) => boolean;
   signIn: (nextUser: SessionUser) => void;
   signOut: () => void;
 }
@@ -58,11 +66,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loadUserFromStorage(),
   );
 
-  const value = useMemo<AuthContextValue>(
-    () => ({
+  const value = useMemo<AuthContextValue>(() => {
+    const permissions = resolveSessionPermissions(user);
+    return {
       user,
       isAuthenticated: Boolean(user),
       isDemo: Boolean(user?.demoMode),
+      isOwner: user?.role === "owner" || user?.role === "superadmin",
+      permissions,
+      can: (key) => userCan(user, key),
       signIn: (nextUser) => {
         setUser(nextUser);
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
@@ -73,9 +85,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.removeItem(SESSION_STORAGE_KEY);
         clearAuxFields();
       },
-    }),
-    [user],
-  );
+    };
+  }, [user]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

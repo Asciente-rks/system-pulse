@@ -6,6 +6,7 @@ import { parse } from "../../utils/parse.js";
 import { loginSchema } from "../../validation/user-validation.js";
 import { verifyPassword } from "../../utils/password.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { resolvePermissions } from "../../types/user.js";
 
 interface LoginBody {
   email: string;
@@ -126,6 +127,7 @@ export const login = async (
           orgId,
           orgName,
           demoMode: Boolean(user.demoMode),
+          permissions: resolvePermissions(user as any),
         },
       }),
     };

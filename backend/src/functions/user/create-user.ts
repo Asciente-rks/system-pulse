@@ -5,8 +5,18 @@ import { handleError, headers } from "../../utils/error-handler.js";
 import { createUserSchema } from "../../validation/user-validation.js";
 import { docClient } from "../../config/db.js";
 import { createUserService } from "../../services/user-service.js";
-import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
-import type { CreateUserInput } from "../../types/user.js";
+import {
+  canInviteRole,
+  hasPermission,
+  isAdminOrSuper,
+  isOwner,
+} from "../../utils/rbac.js";
+import {
+  PERMISSION_KEYS,
+  resolvePermissions,
+  type CreateUserInput,
+  type UserPermissions,
+} from "../../types/user.js";
 import { sendInviteEmail } from "../../services/email-service.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
 import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
@@ -82,7 +92,7 @@ export const createUserInvitation = async (
       };
     }
 
-    // Resolve actor for org scoping + demo guard.
+    // Resolve actor for org scoping + demo guard + permission check.
     let actorOrgId: string | undefined;
     let actorRecord: Record<string, unknown> = {};
     if (actorUserId) {
@@ -101,6 +111,54 @@ export const createUserInvitation = async (
     // Demo sessions cannot persist new invitations into the platform.
     rejectIfDemo(actorRecord as any);
 
+    // Permission gate (authoritative).
+    if (!hasPermission(actorRecord as any, "canCreateUser")) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          status: 403,
+          message:
+            "forbidden - your account does not have the canCreateUser permission",
+        }),
+      };
+    }
+
+    // Only owners can mint other admins. Plain admins can invite
+    // user-tier accounts only.
+    if (validated.role === "admin" && !isOwner(actorRecord.role as any)) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          status: 403,
+          message: "forbidden - only the org owner can create admin accounts",
+        }),
+      };
+    }
+
+    // Permissions whitelist on the inviter side. Only the owner can
+    // grant elevated permissions; admins can grant a subset.
+    const requestedPermissions = (body.permissions || {}) as Partial<
+      UserPermissions
+    >;
+    const actorIsOwner = isOwner(actorRecord.role as any);
+    const filteredPermissions: Partial<UserPermissions> = {};
+    for (const key of PERMISSION_KEYS) {
+      if (typeof requestedPermissions[key] !== "boolean") continue;
+      if (
+        !actorIsOwner &&
+        (key === "canDeleteUser" ||
+          key === "canDeleteSystem" ||
+          key === "canUpdateUser")
+      ) {
+        // Plain admins cannot grant the dangerous permissions on
+        // creation. They can still flip view/trigger flags off.
+        continue;
+      }
+      filteredPermissions[key] = requestedPermissions[key];
+    }
+
     const service = createUserService(docClient, tableName);
     const orgIdForNewUser = actorOrgId || DEMO_ORG_ID;
 
@@ -108,7 +166,9 @@ export const createUserInvitation = async (
       await service.createUserInvitation({
         ...validated,
         orgId: orgIdForNewUser,
+        permissions: filteredPermissions,
       });
+    void resolvePermissions; // referenced for tree-shake hint
 
     const frontend = resolveFrontendBaseUrl(event.headers);
     const inviteLink = `${frontend}/accept-invite?token=${inviteToken}`;

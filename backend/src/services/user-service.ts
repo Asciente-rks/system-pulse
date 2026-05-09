@@ -3,7 +3,12 @@ import {
   PutCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
-import { User, CreateUserInput } from "../types/user.js";
+import {
+  DEFAULT_PERMISSIONS_BY_ROLE,
+  User,
+  CreateUserInput,
+  type UserPermissions,
+} from "../types/user.js";
 
 const USER_PK = "USER";
 const SK_PREFIX_USER = "USER#";
@@ -25,9 +30,13 @@ export const createUserService = (
     /**
      * Used by org admins to invite a new org member.
      * `orgId` MUST be provided by the caller; it is the inviter's org.
+     * Permissions can be passed explicitly to override the role default.
      */
     async createUserInvitation(
-      input: CreateUserInput & { orgId?: string },
+      input: CreateUserInput & {
+        orgId?: string;
+        permissions?: Partial<UserPermissions>;
+      },
     ): Promise<{
       user: User;
       inviteToken: string;
@@ -43,11 +52,20 @@ export const createUserService = (
       const inviteExpiryMs =
         Date.now() + inviteEligibilityHours * 60 * 60 * 1000;
 
+      const defaults =
+        DEFAULT_PERMISSIONS_BY_ROLE[input.role] ||
+        DEFAULT_PERMISSIONS_BY_ROLE.user;
+      const permissions: UserPermissions = {
+        ...defaults,
+        ...(input.permissions || {}),
+      };
+
       const user: User = {
         id: userId,
         ...input,
         status_: "Pending",
         createDate,
+        permissions,
       };
 
       const record: UserRecord = {
@@ -74,11 +92,12 @@ export const createUserService = (
     },
 
     /**
-     * Used by self-serve registration. Creates an active admin user
-     * directly (no invite token). Caller is responsible for setting
-     * orgId and passwordHash.
+     * Used by self-serve registration. Creates an active **owner**
+     * user (the org creator) with full permissions. The "owner" role
+     * is special: it cannot be demoted by anyone other than another
+     * owner / superadmin and always carries every permission.
      */
-    async createActiveAdmin(input: {
+    async createActiveOwner(input: {
       email: string;
       full_name: string;
       passwordHash: string;
@@ -92,12 +111,13 @@ export const createUserService = (
         id: userId,
         email: input.email,
         full_name: input.full_name,
-        role: "admin",
+        role: "owner",
         status_: "Active",
         createDate,
         passwordHash: input.passwordHash,
         allowedSystemIds: [],
         orgId: input.orgId,
+        permissions: { ...DEFAULT_PERMISSIONS_BY_ROLE.owner },
       };
 
       const record: UserRecord = {
@@ -144,6 +164,7 @@ export const createUserService = (
         orgId: input.orgId,
         demoMode: true,
         demoExpiresAt: expiresAt,
+        permissions: { ...DEFAULT_PERMISSIONS_BY_ROLE[input.role] },
       };
 
       const record: UserRecord = {

@@ -15,11 +15,14 @@ import { demoStart } from "./functions/auth/demo-start.js";
 import { createUserInvitation } from "./functions/user/create-user.js";
 import { acceptUserInvitation } from "./functions/user/accept-invite.js";
 import { assignSystemAccess } from "./functions/user/assign-system-access.js";
+import { updateUserPermissions } from "./functions/user/update-permissions.js";
+import { changeUserRole } from "./functions/user/change-role.js";
 import { listUsers } from "./functions/user/list-users.js";
 import { getUser } from "./functions/user/get-user.js";
 import { deleteUser } from "./functions/user/delete-user.js";
 import { listSystems } from "./functions/health/list-systems.js";
 import { createHealthCheck } from "./functions/health/check-health.js";
+import { updateSystem } from "./functions/health/update-system.js";
 import { deleteSystem } from "./functions/health/delete-system.js";
 import { triggerHealthCheck } from "./functions/health/trigger-health.js";
 import { getSystemLogs } from "./functions/health/get-system-logs.js";
@@ -56,6 +59,12 @@ const routes: Route[] = [
     handler: acceptUserInvitation,
   },
   { method: "POST", path: "/users/:id/systems", handler: assignSystemAccess },
+  {
+    method: "POST",
+    path: "/users/:id/permissions",
+    handler: updateUserPermissions,
+  },
+  { method: "POST", path: "/users/:id/role", handler: changeUserRole },
   { method: "GET", path: "/users", handler: listUsers },
   { method: "GET", path: "/users/:id", handler: getUser },
   { method: "DELETE", path: "/users/:id", handler: deleteUser },
@@ -63,6 +72,7 @@ const routes: Route[] = [
   // Systems (org-scoped)
   { method: "GET", path: "/systems", handler: listSystems },
   { method: "POST", path: "/systems", handler: createHealthCheck },
+  { method: "PATCH", path: "/systems/:id", handler: updateSystem },
   { method: "DELETE", path: "/systems/:id", handler: deleteSystem },
   { method: "POST", path: "/systems/:id/trigger", handler: triggerHealthCheck },
   { method: "GET", path: "/systems/:id/logs", handler: getSystemLogs },

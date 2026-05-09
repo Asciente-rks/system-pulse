@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   getSystemLogs,
   listSystems,
@@ -14,8 +14,11 @@ import {
 
 type TesterTab = "systems" | "logs";
 
+const POLL_INTERVAL_MS = 10_000;
+const FAST_POLL_INTERVAL_MS = 4_000;
+
 export default function TesterDashboard() {
-  const { user, isDemo } = useAuth();
+  const { user, isDemo, can } = useAuth();
   const [activeTab, setActiveTab] = useState<TesterTab>("systems");
   const [systems, setSystems] = useState<SystemSummary[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -30,18 +33,24 @@ export default function TesterDashboard() {
   >({});
   const [timeNow, setTimeNow] = useState(() => Date.now());
 
-  async function loadSystems() {
-    setBusy("load");
-    setErrorMessage(null);
+  const loadingRef = useRef(false);
+
+  async function loadSystems(silent = false) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!silent) {
+      setBusy("load");
+      setErrorMessage(null);
+    }
     try {
       const response = await listSystems(150);
       setSystems(response.data?.systems || []);
-
-      if (response._httpStatus >= 400) {
+      if (!silent && response._httpStatus >= 400) {
         setErrorMessage(String(response.message || "Failed to load systems"));
       }
     } finally {
-      setBusy(null);
+      loadingRef.current = false;
+      if (!silent) setBusy(null);
     }
   }
 
@@ -50,14 +59,46 @@ export default function TesterDashboard() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setTimeNow(Date.now());
-    }, 1000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
+    const timer = window.setInterval(() => setTimeNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
+
+  const hasPendingChecks = useMemo(
+    () =>
+      Object.values(checkingUntilBySystem).some((until) => until > timeNow),
+    [checkingUntilBySystem, timeNow],
+  );
+
+  // Real-time refresh. Faster cadence while there are pending checks.
+  useEffect(() => {
+    const interval = hasPendingChecks
+      ? FAST_POLL_INTERVAL_MS
+      : POLL_INTERVAL_MS;
+    const id = window.setInterval(() => {
+      void loadSystems(true);
+    }, interval);
+    return () => window.clearInterval(id);
+  }, [hasPendingChecks]);
+
+  // If a logs view is open, refresh logs alongside the systems poll
+  // so the user sees new entries appear without clicking again.
+  useEffect(() => {
+    if (!logsSystemId) return;
+    const refresh = async () => {
+      try {
+        const response = await getSystemLogs(logsSystemId, 20);
+        if (response._httpStatus >= 400) return;
+        setLogsResult(response as unknown as Record<string, unknown>);
+      } catch {
+        /* ignore */
+      }
+    };
+    const interval = hasPendingChecks
+      ? FAST_POLL_INTERVAL_MS
+      : POLL_INTERVAL_MS;
+    const id = window.setInterval(refresh, interval);
+    return () => window.clearInterval(id);
+  }, [logsSystemId, hasPendingChecks]);
 
   async function handleTrigger(systemId: string) {
     setBusy(`trigger-${systemId}`);
@@ -75,24 +116,21 @@ export default function TesterDashboard() {
       )?.delayedRecheckSeconds;
       const delaySeconds = Number(delaySecondsRaw);
 
-      if (Number.isFinite(delaySeconds) && delaySeconds > 0) {
-        setCheckingUntilBySystem((current) => ({
-          ...current,
-          [systemId]: Date.now() + delaySeconds * 1000,
-        }));
-        setStatusMessage(
-          `Health check queued for ${systemId}. Render wake-up recheck in ${delaySeconds}s.`,
-        );
-      } else {
-        setCheckingUntilBySystem((current) => {
-          const next = { ...current };
-          delete next[systemId];
-          return next;
-        });
-        setStatusMessage(
-          `Health check queued for ${systemId}. Standard single-pass workflow.`,
-        );
-      }
+      const totalDelay =
+        Number.isFinite(delaySeconds) && delaySeconds > 0
+          ? delaySeconds + 5
+          : 8;
+
+      setCheckingUntilBySystem((current) => ({
+        ...current,
+        [systemId]: Date.now() + totalDelay * 1000,
+      }));
+
+      setStatusMessage(
+        Number.isFinite(delaySeconds) && delaySeconds > 0
+          ? `Health check queued. Render wake-up recheck in ${delaySeconds}s.`
+          : `Health check queued. Live status will refresh shortly.`,
+      );
 
       await loadSystems();
     } finally {
@@ -135,23 +173,22 @@ export default function TesterDashboard() {
 
       if (latestLog) {
         setSystems((current) =>
-          current.map((system) => {
-            if (system.id !== systemId) {
-              return system;
-            }
-
-            return {
-              ...system,
-              status: normalizeHealthStatus(
-                latestLog.status,
-                latestLog.responseCode,
-              ),
-              lastChecked: latestLog.checkedAt || system.lastChecked,
-              lastResponseCode:
-                latestLog.responseCode ?? system.lastResponseCode,
-              responseTimeMs: latestLog.responseTimeMs ?? system.responseTimeMs,
-            };
-          }),
+          current.map((system) =>
+            system.id === systemId
+              ? {
+                  ...system,
+                  status: normalizeHealthStatus(
+                    latestLog.status,
+                    latestLog.responseCode,
+                  ),
+                  lastChecked: latestLog.checkedAt || system.lastChecked,
+                  lastResponseCode:
+                    latestLog.responseCode ?? system.lastResponseCode,
+                  responseTimeMs:
+                    latestLog.responseTimeMs ?? system.responseTimeMs,
+                }
+              : system,
+          ),
         );
       }
 
@@ -164,25 +201,26 @@ export default function TesterDashboard() {
   return (
     <div className="stack-lg">
       {isDemo && (
-        <section className="panel" style={{ borderColor: "#7d4eff" }}>
+        <section className="panel demo-banner">
           <p className="panel-title" style={{ marginBottom: 6 }}>
             🧪 Demo mode active
           </p>
           <p className="panel-copy compact-copy">
             You're exploring real systems. Triggering checks and viewing logs
-            works exactly like a real tester. Sign up to track your own
-            systems.
+            works exactly like a real tester.
           </p>
         </section>
       )}
 
       <section className="panel panel-hero">
         <h2 className="panel-title">
-          {user?.orgName ? `${user.orgName} — Tester Dashboard` : "Tester Dashboard"}
+          {user?.orgName
+            ? `${user.orgName} — Tester Dashboard`
+            : "Tester Dashboard"}
         </h2>
         <p className="panel-copy">
-          Trigger health checks for your assigned systems. Render systems use an
-          automatic delayed recheck; standard systems run a single-pass check.
+          Trigger health checks for your assigned systems. Status auto-refreshes;
+          Render systems use an automatic delayed recheck.
         </p>
         <div className="dashboard-tabs">
           <button
@@ -208,11 +246,17 @@ export default function TesterDashboard() {
           <div className="button-row">
             <button
               className="btn btn-success"
-              onClick={loadSystems}
+              onClick={() => loadSystems()}
               disabled={busy === "load"}
             >
               {busy === "load" ? "Refreshing..." : "Refresh"}
             </button>
+            <span
+              className="panel-copy compact-copy"
+              style={{ alignSelf: "center", opacity: 0.7 }}
+            >
+              Live updates every {hasPendingChecks ? "4" : "10"}s
+            </span>
           </div>
 
           <div className="grid-cards">
@@ -228,8 +272,14 @@ export default function TesterDashboard() {
                     <p className="system-title">{system.name}</p>
                     <p className="panel-copy system-url">{system.url}</p>
                     <p className="panel-copy">Status: {status}</p>
-                    <p className="panel-copy">
-                      Last check: {system.lastChecked || "No checks yet"}
+                    <p
+                      className="panel-copy"
+                      style={{ fontSize: "0.85em", opacity: 0.75 }}
+                    >
+                      Last check:{" "}
+                      {system.lastChecked
+                        ? new Date(system.lastChecked).toLocaleString()
+                        : "No checks yet"}
                     </p>
                   </div>
 
@@ -238,7 +288,9 @@ export default function TesterDashboard() {
                       className="btn btn-success system-action-btn"
                       onClick={() => handleTrigger(system.id)}
                       disabled={
-                        busy === `trigger-${system.id}` || isChecking(system.id)
+                        busy === `trigger-${system.id}` ||
+                        isChecking(system.id) ||
+                        !can("canTriggerHealthChecks")
                       }
                     >
                       {busy === `trigger-${system.id}`
@@ -250,7 +302,9 @@ export default function TesterDashboard() {
                     <button
                       className="btn btn-warning system-action-btn"
                       onClick={() => handleLogs(system.id)}
-                      disabled={busy === `logs-${system.id}`}
+                      disabled={
+                        busy === `logs-${system.id}` || !can("canViewLogs")
+                      }
                     >
                       {busy === `logs-${system.id}`
                         ? "Loading..."
@@ -273,7 +327,7 @@ export default function TesterDashboard() {
           <h3 className="panel-subtitle">Logs</h3>
           <p className="panel-copy">
             {logsResult
-              ? `System: ${logsSystemId}`
+              ? `System: ${logsSystemId} (auto-refreshing)`
               : "Pick a system and open logs."}
           </p>
           {logsResult && (

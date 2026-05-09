@@ -8,7 +8,10 @@ import {
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
-import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
+import {
+  hasPermission,
+  isSuperAdmin,
+} from "../../utils/rbac.js";
 import {
   getActorUserId,
   rejectIfDemo,
@@ -70,12 +73,13 @@ export const deleteSystem = async (
     // Demo sessions are blocked from deleting any system.
     rejectIfDemo(actor as any);
 
-    if (!isAdminOrSuper(actor.role as any)) {
+    if (!hasPermission(actor as any, "canDeleteSystem")) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({
-          message: "forbidden - admin or superadmin required",
+          message:
+            "forbidden - your account does not have the canDeleteSystem permission",
         }),
       };
     }

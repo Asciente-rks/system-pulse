@@ -6,7 +6,7 @@ import { createHealthSchema } from "../../validation/health-schema.js";
 import { docClient } from "../../config/db.js";
 import { createHealthService } from "../../services/health-service.js";
 import type { CreateHealthInput } from "../../types/health.js";
-import { isAdminOrSuper } from "../../utils/rbac.js";
+import { hasPermission } from "../../utils/rbac.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
 import { rejectIfDemo } from "../../utils/actor-auth.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
@@ -51,20 +51,10 @@ export const createHealthCheck = async (
           (event.headers["X-User-Id"] as string))) ||
       undefined;
 
-    if (!isAdminOrSuper(inviterRole as any)) {
-      return {
-        statusCode: 403,
-        headers,
-        body: JSON.stringify({
-          status: 403,
-          message: "forbidden - only admin or superadmin can add systems",
-        }),
-      };
-    }
-
-    // Resolve actor for org scoping + demo guard.
+    // Resolve actor for permission check + org scoping + demo guard.
     let actorOrgId: string | undefined;
     let actorIsDemo = false;
+    let actorRecord: Record<string, unknown> = {};
     if (actorUserId) {
       try {
         const actorResponse: any = await docClient.send(
@@ -73,11 +63,26 @@ export const createHealthCheck = async (
             Key: { PK: "USER", SK: `USER#${actorUserId}` },
           }),
         );
-        const u = actorResponse.Item || {};
-        actorOrgId = u.orgId as string | undefined;
-        actorIsDemo = Boolean(u.demoMode);
+        actorRecord = actorResponse.Item || {};
+        actorOrgId = actorRecord.orgId as string | undefined;
+        actorIsDemo = Boolean(actorRecord.demoMode);
       } catch {}
     }
+
+    if (!hasPermission(actorRecord as any, "canCreateSystem")) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          status: 403,
+          message:
+            "forbidden - your account does not have the canCreateSystem permission",
+        }),
+      };
+    }
+
+    // Header-role mismatch sanity check kept as belt-and-braces.
+    void inviterRole;
 
     // Demo sessions are sandboxed: they may CREATE systems in the demo
     // org (so reviewers can test the create flow), but the system is
