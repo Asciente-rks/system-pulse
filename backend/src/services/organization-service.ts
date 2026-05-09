@@ -14,6 +14,11 @@ interface OrgRecord extends Organization {
   PK: string;
   SK: string;
   entityType: string;
+  // The EntityTypeIndex GSI uses entityType (HASH) + status_ (RANGE).
+  // DDB skips items missing the range key from the index, so without
+  // this every ORG would be invisible to GSI queries. We always set
+  // it to "Active" — orgs don't have a meaningful status today.
+  status_: "Active";
 }
 
 const slugify = (name: string): string =>
@@ -67,6 +72,7 @@ export const createOrganizationService = (
         PK: ORG_PK,
         SK: `${ORG_SK_PREFIX}${id}`,
         entityType: ENTITY_TYPE,
+        status_: "Active",
       };
 
       await docClient.send(

@@ -12,6 +12,7 @@ import {
   canSeeOrg,
   hasPermission,
   isOwner,
+  isSuperAdmin,
 } from "../../utils/rbac.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
 import { rejectIfDemo } from "../../utils/actor-auth.js";
@@ -120,15 +121,27 @@ export const updateUserPermissions = async (
       };
     }
 
-    // Cannot edit owners or superadmins via this endpoint. Use the
-    // role-change endpoint to demote them first.
-    if (target.role === "owner" || target.role === "superadmin") {
+    // Superadmins are platform-level and can never be edited via
+    // this endpoint. Owners are normally protected too — except when
+    // the actor is themselves a superadmin, in which case they can
+    // suspend / reactivate / adjust permissions on owners (e.g. to
+    // disable a misbehaving org without deleting it).
+    if (target.role === "superadmin") {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          message: "forbidden - cannot edit superadmin via permission update",
+        }),
+      };
+    }
+    if (target.role === "owner" && !isSuperAdmin(actor.role as any)) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({
           message:
-            "forbidden - cannot edit owner or superadmin via permission update",
+            "forbidden - only superadmin can edit org owners",
         }),
       };
     }

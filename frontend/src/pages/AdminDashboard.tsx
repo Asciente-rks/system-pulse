@@ -71,6 +71,10 @@ export default function AdminDashboard() {
   // Platform tab (superadmin)
   const [platformOrgs, setPlatformOrgs] = useState<OrgSummary[]>([]);
   const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
+  const [orgSystemsCache, setOrgSystemsCache] = useState<
+    Record<string, SystemSummary[]>
+  >({});
+  const [orgSystemsBusy, setOrgSystemsBusy] = useState<string | null>(null);
 
   // Create system form
   const [systemName, setSystemName] = useState("");
@@ -239,7 +243,17 @@ export default function AdminDashboard() {
       });
 
       if (response._httpStatus >= 400) {
-        setErrorMessage(String(response.message || "Invite failed"));
+        // The backend now puts the first validation error in `message`.
+        // If there's a richer `errors` array, surface up to two of
+        // them so the user sees exactly which field is unhappy.
+        const detail = Array.isArray((response as any).errors)
+          ? (response as any).errors.slice(0, 2).join(" · ")
+          : "";
+        setErrorMessage(
+          [String(response.message || "Invite failed"), detail]
+            .filter(Boolean)
+            .join(" — "),
+        );
         return;
       }
 
@@ -525,6 +539,25 @@ export default function AdminDashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, isSuperAdmin]);
+
+  async function loadOrgSystems(orgId: string) {
+    setOrgSystemsBusy(orgId);
+    try {
+      const response = await listSystems(200, { orgId });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not load org systems"),
+        );
+        return;
+      }
+      setOrgSystemsCache((current) => ({
+        ...current,
+        [orgId]: response.data?.systems || [],
+      }));
+    } finally {
+      setOrgSystemsBusy(null);
+    }
+  }
 
   async function handleSuspendToggle(target: SessionUser) {
     const next = target.status_ === "Suspended" ? "Active" : "Suspended";
@@ -1035,8 +1068,8 @@ export default function AdminDashboard() {
                           )}
                           {canUpdateUserPerm &&
                             entry.id !== user?.id &&
-                            entry.role !== "owner" &&
-                            entry.role !== "superadmin" && (
+                            entry.role !== "superadmin" &&
+                            (entry.role !== "owner" || isSuperAdmin) && (
                               <button
                                 className={`btn ${
                                   entry.status_ === "Suspended"
@@ -1178,13 +1211,20 @@ export default function AdminDashboard() {
                     <div className="button-row" style={{ gap: 8 }}>
                       <button
                         className="btn btn-info"
-                        onClick={() =>
-                          setExpandedOrgId(expanded ? null : org.id)
-                        }
+                        onClick={() => {
+                          if (expanded) {
+                            setExpandedOrgId(null);
+                          } else {
+                            setExpandedOrgId(org.id);
+                            if (!orgSystemsCache[org.id]) {
+                              void loadOrgSystems(org.id);
+                            }
+                          }
+                        }}
                       >
                         {expanded
-                          ? "Hide members"
-                          : `View members (${orgUsers.length})`}
+                          ? "Hide details"
+                          : `View members + systems`}
                       </button>
                     </div>
 
@@ -1251,6 +1291,68 @@ export default function AdminDashboard() {
                             )}
                           </tbody>
                         </table>
+
+                        <p
+                          className="field-label"
+                          style={{ marginTop: 12 }}
+                        >
+                          Systems in this org
+                        </p>
+                        {orgSystemsBusy === org.id && (
+                          <p className="panel-copy compact-copy">
+                            Loading...
+                          </p>
+                        )}
+                        {orgSystemsBusy !== org.id &&
+                          orgSystemsCache[org.id] && (
+                            <div className="grid-cards">
+                              {orgSystemsCache[org.id]!.map((s) => {
+                                const status = getSystemHealthStatus(s);
+                                return (
+                                  <article
+                                    key={s.id}
+                                    className="system-card"
+                                    style={{ padding: 14 }}
+                                  >
+                                    <div>
+                                      <span
+                                        className={statusPillClassName(
+                                          status,
+                                        )}
+                                      >
+                                        {status}
+                                      </span>
+                                      <p className="system-title">
+                                        {s.name}
+                                      </p>
+                                      <p className="panel-copy system-url">
+                                        {s.url}
+                                      </p>
+                                      {s.lastChecked && (
+                                        <p
+                                          className="panel-copy"
+                                          style={{
+                                            fontSize: "0.85em",
+                                            opacity: 0.75,
+                                          }}
+                                        >
+                                          Last checked:{" "}
+                                          {new Date(
+                                            s.lastChecked,
+                                          ).toLocaleString()}
+                                        </p>
+                                      )}
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                              {orgSystemsCache[org.id]!.length === 0 && (
+                                <p className="panel-copy compact-copy">
+                                  No systems registered in this org yet.
+                                </p>
+                              )}
+                            </div>
+                          )}
                       </div>
                     )}
                   </article>

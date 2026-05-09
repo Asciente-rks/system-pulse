@@ -36,10 +36,14 @@ export const headers = {
 
 export const handleError = (e: unknown) => {
   if (e instanceof yup.ValidationError) {
+    // Surface the first validation error in `message` so the SPA's
+    // generic "show response.message" code path renders something
+    // useful. The full list is still available under `errors`.
     return {
       statusCode: 400,
       headers,
       body: JSON.stringify({
+        message: e.errors?.[0] || "Validation failed",
         errors: e.errors,
       }),
     };
@@ -50,6 +54,7 @@ export const handleError = (e: unknown) => {
       statusCode: 400,
       headers,
       body: JSON.stringify({
+        message: "Invalid request body format",
         error: "Invalid request body format",
       }),
     };

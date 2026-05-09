@@ -338,9 +338,14 @@ export async function resetPassword(
   });
 }
 
-export async function listSystems(limit = 100) {
+export async function listSystems(
+  limit = 100,
+  options?: { orgId?: string },
+) {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (options?.orgId) qs.set("orgId", options.orgId);
   return request<{ data?: { systems?: SystemSummary[] }; message?: string }>(
-    `/systems?limit=${encodeURIComponent(String(limit))}`,
+    `/systems?${qs.toString()}`,
     {
       method: "GET",
     },
@@ -473,6 +478,17 @@ export async function updateMyEmailStart(payload: {
     message?: string;
     data?: { expiresInMinutes: number; devOtp?: string };
   }>("/me/email/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateMyPassword(payload: {
+  current_password: string;
+  new_password: string;
+  confirm_new_password: string;
+}) {
+  return request<{ message?: string }>("/me/password", {
     method: "POST",
     body: JSON.stringify(payload),
   });

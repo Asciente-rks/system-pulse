@@ -31,6 +31,7 @@ import { getMe } from "./functions/me/get-me.js";
 import { updateMyName } from "./functions/me/update-name.js";
 import { updateMyEmailStart } from "./functions/me/update-email-start.js";
 import { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
+import { updateMyPassword } from "./functions/me/update-password.js";
 import { updateOrg } from "./functions/org/update-org.js";
 import { listOrgs } from "./functions/org/list-orgs.js";
 
@@ -71,6 +72,7 @@ const routes: Route[] = [
     path: "/me/email/verify",
     handler: updateMyEmailVerify,
   },
+  { method: "POST", path: "/me/password", handler: updateMyPassword },
 
   // Org-level admin
   { method: "GET", path: "/orgs", handler: listOrgs },

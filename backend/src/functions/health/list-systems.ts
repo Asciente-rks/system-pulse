@@ -118,6 +118,11 @@ export const listSystems = async (
       }
     }
 
+    // Optional `?orgId=xxx` query. Superadmin uses this to drill into
+    // a specific org's systems from the Platform tab. Non-superadmin
+    // requests ignore it — they can't escape their own org.
+    const requestedOrgId = event.queryStringParameters?.orgId;
+
     if (!isAdminOrSuper(actorRole as any)) {
       if (!userId) {
         return {
@@ -135,9 +140,9 @@ export const listSystems = async (
         };
       }
 
-      // Org members see only systems within their org AND that they have
-      // been explicitly granted access to. Demo `user` role implicitly
-      // gets access to every demo system (it's a sandbox).
+      // Org members see only systems within their org AND that they
+      // have been explicitly granted access to. Demo `user` role
+      // implicitly gets access to every demo system (it's a sandbox).
       const scopedOrgId = actorOrgId || DEMO_ORG_ID;
       systems = systems.filter((system) => system.orgId === scopedOrgId);
 
@@ -146,12 +151,20 @@ export const listSystems = async (
           actorAllowedSystems.includes(system.id),
         );
       }
-    } else if (!isSuperAdmin(actorRole as any)) {
-      // Plain admin: scoped to own org. Demo admins see only the demo org.
+    } else if (isSuperAdmin(actorRole as any)) {
+      // Superadmin: filtered to a specific org if `?orgId=` is present
+      // (used by the Platform drill-down), otherwise to the
+      // superadmin's *own* org so the Systems tab stays scoped to
+      // their personal collection — not a cross-org dump.
+      const scopedOrgId =
+        requestedOrgId || actorOrgId || "platform";
+      systems = systems.filter((system) => system.orgId === scopedOrgId);
+    } else {
+      // Plain admin / owner: scoped to own org. Demo admins see only
+      // the demo org.
       const scopedOrgId = actorOrgId || DEMO_ORG_ID;
       systems = systems.filter((system) => system.orgId === scopedOrgId);
     }
-    // Superadmin: cross-org visibility, no filter.
 
     return {
       statusCode: 200,

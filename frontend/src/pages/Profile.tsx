@@ -5,11 +5,21 @@ import {
   updateMyEmailStart,
   updateMyEmailVerify,
   updateMyName,
+  updateMyPassword,
   updateOrg,
 } from "../services/api";
 import { useAuth } from "../hooks/useAuth";
-import { fullNameYup, emailYup, otpYup, orgNameYup } from "../utils/validation";
+import {
+  fullNameYup,
+  emailYup,
+  otpYup,
+  orgNameYup,
+  passwordYup,
+} from "../utils/validation";
 import * as yup from "yup";
+import PasswordChecklist, {
+  isPasswordStrong,
+} from "../components/PasswordChecklist";
 
 type EmailStage = "idle" | "verify";
 
@@ -34,6 +44,14 @@ export default function Profile() {
   const [emailDevOtp, setEmailDevOtp] = useState<string | null>(null);
   const [emailExpiresIn, setEmailExpiresIn] = useState<number | null>(null);
   const [emailLoading, setEmailLoading] = useState(false);
+
+  // ---- Password change ----
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [passwordStatus, setPasswordStatus] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   // ---- Org rename (owner only) ----
   const [orgName, setOrgName] = useState(user?.orgName || "");
@@ -159,6 +177,48 @@ export default function Profile() {
       await refreshSession();
     } finally {
       setEmailLoading(false);
+    }
+  }
+
+  async function submitPassword(event: React.FormEvent) {
+    event.preventDefault();
+    setPasswordStatus(null);
+    setPasswordError(null);
+
+    if (newPassword !== confirmNewPassword) {
+      setPasswordError("New passwords don't match");
+      return;
+    }
+
+    try {
+      await yup.string().required().validate(currentPassword);
+      await passwordYup.validate(newPassword);
+    } catch (err) {
+      setPasswordError(
+        err instanceof Error ? err.message : "Invalid password",
+      );
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      const response = await updateMyPassword({
+        current_password: currentPassword,
+        new_password: newPassword,
+        confirm_new_password: confirmNewPassword,
+      });
+      if (response._httpStatus >= 400) {
+        setPasswordError(
+          response.message || "Could not update password",
+        );
+        return;
+      }
+      setPasswordStatus("Password updated.");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+    } finally {
+      setPasswordLoading(false);
     }
   }
 
@@ -385,7 +445,76 @@ export default function Profile() {
         {emailError && <p className="status-error">{emailError}</p>}
       </section>
 
-      {isOwner && user.orgId && (
+      <section className="panel">
+        <h3 className="panel-subtitle">Password</h3>
+        <p className="panel-copy compact-copy">
+          Confirm your current password, then enter a new one. Changing
+          your password also clears any failed-login lockout on your
+          account.
+        </p>
+        <form onSubmit={submitPassword} className="form-grid form-grid-2col">
+          <div className="form-field">
+            <label className="field-label">Current password</label>
+            <input
+              className="field-input"
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              required
+              disabled={!canEditOwnProfile}
+              autoComplete="current-password"
+            />
+          </div>
+          <div className="form-field">
+            <label className="field-label">New password</label>
+            <input
+              className="field-input"
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              required
+              disabled={!canEditOwnProfile}
+              autoComplete="new-password"
+            />
+            <PasswordChecklist password={newPassword} hideUntilTyped />
+          </div>
+          <div className="form-field">
+            <label className="field-label">Confirm new password</label>
+            <input
+              className="field-input"
+              type="password"
+              value={confirmNewPassword}
+              onChange={(event) => setConfirmNewPassword(event.target.value)}
+              required
+              disabled={!canEditOwnProfile}
+              autoComplete="new-password"
+            />
+            {confirmNewPassword.length > 0 &&
+              confirmNewPassword !== newPassword && (
+                <p className="status-error">Passwords do not match</p>
+              )}
+          </div>
+          <div className="form-field form-action-field">
+            <label className="field-label">&nbsp;</label>
+            <button
+              className="btn btn-primary"
+              disabled={
+                !canEditOwnProfile ||
+                passwordLoading ||
+                !isPasswordStrong(newPassword) ||
+                newPassword !== confirmNewPassword ||
+                currentPassword.length === 0
+              }
+            >
+              {passwordLoading ? "Saving..." : "Update password"}
+            </button>
+          </div>
+        </form>
+        {passwordStatus && <p className="status-note">{passwordStatus}</p>}
+        {passwordError && <p className="status-error">{passwordError}</p>}
+      </section>
+
+      {isOwner && user.orgId && user.orgId !== "platform" && (
         <section className="panel">
           <h3 className="panel-subtitle">Organization</h3>
           <p className="panel-copy compact-copy">

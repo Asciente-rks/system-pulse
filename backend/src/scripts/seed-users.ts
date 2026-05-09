@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
+  GetCommand,
   PutCommand,
   QueryCommand,
   UpdateCommand,
@@ -9,6 +10,14 @@ import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
 import { DEMO_ORG_ID } from "../types/organization.js";
 import { DEFAULT_PERMISSIONS_BY_ROLE } from "../types/user.js";
+
+/**
+ * Sentinel id for the org that holds the platform-level superadmin's
+ * personal systems. Hidden from regular org listings (orgs.tsx
+ * filters by isInternal) — the superadmin uses it as their own
+ * private workspace.
+ */
+const PLATFORM_ORG_ID = "platform";
 
 /**
  * Bootstrap seed for a fresh deployment.
@@ -71,13 +80,13 @@ async function seed() {
           PK: "ORG",
           SK: `ORG#${DEMO_ORG_ID}`,
           entityType: "ORG",
+          // status_ is required so the EntityTypeIndex GSI picks
+          // this row up when superadmin queries cross-org.
+          status_: "Active",
           id: DEMO_ORG_ID,
           name: "System Pulse Demo",
           slug: "demo",
           isDemo: true,
-          // ownerId is left as the literal "platform" sentinel
-          // because there is no real human owning the demo org —
-          // the platform itself does.
           ownerId: "platform",
           createDate: now,
         },
@@ -86,6 +95,34 @@ async function seed() {
     console.log("Seeded demo organization");
   } catch (err) {
     console.error("Failed to seed demo organization:", err);
+    failureCount += 1;
+  }
+
+  // 1b) Platform organization — the private workspace for the
+  // superadmin's personal systems. Always provisioned so the
+  // Systems tab works for any superadmin signed into the platform.
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: {
+          PK: "ORG",
+          SK: `ORG#${PLATFORM_ORG_ID}`,
+          entityType: "ORG",
+          status_: "Active",
+          id: PLATFORM_ORG_ID,
+          name: "Platform (Superadmin)",
+          slug: "platform",
+          isDemo: false,
+          ownerId: "seed-superadmin",
+          createDate: now,
+          isInternal: true,
+        },
+      }),
+    );
+    console.log("Seeded platform organization");
+  } catch (err) {
+    console.error("Failed to seed platform organization:", err);
     failureCount += 1;
   }
 
@@ -146,8 +183,37 @@ async function seed() {
     password: process.env.SEED_SUPERADMIN_PASSWORD,
     full_name: process.env.SEED_SUPERADMIN_NAME || "Platform Admin",
     role: "superadmin",
-    // Superadmin is platform-wide; no orgId.
+    // Superadmin lives in the platform org so the Systems tab gets
+    // a non-empty default scope.
+    orgId: PLATFORM_ORG_ID,
   });
+
+  // Idempotent backfill: if a superadmin row already exists from an
+  // earlier seed (no orgId), tag it onto the platform org so they
+  // see *their* systems instead of a cross-org dump.
+  try {
+    const existing: any = await docClient.send(
+      new GetCommand({
+        TableName: tableName,
+        Key: { PK: "USER", SK: `USER#seed-superadmin` },
+      }),
+    );
+    if (existing.Item && !existing.Item.orgId) {
+      await docClient.send(
+        new UpdateCommand({
+          TableName: tableName,
+          Key: { PK: "USER", SK: `USER#seed-superadmin` },
+          UpdateExpression: "SET orgId = :orgId",
+          ExpressionAttributeValues: { ":orgId": PLATFORM_ORG_ID },
+        }),
+      );
+      console.log(
+        "Backfilled orgId=platform on existing seed-superadmin row",
+      );
+    }
+  } catch (err) {
+    console.warn("Superadmin orgId backfill skipped:", err);
+  }
 
   await seedAccount({
     id: "seed-admin",

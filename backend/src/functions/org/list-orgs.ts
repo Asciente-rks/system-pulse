@@ -57,20 +57,27 @@ export const listOrgs = async (
       };
     }
 
-    // Pull every ORG record. Records that don't carry an `entityType`
-    // (legacy) are skipped — we expect every ORG to have one set.
+    // Query the main table partition directly. Earlier code used the
+    // EntityTypeIndex GSI, but DDB only indexes items that carry both
+    // GSI keys — and ORG records didn't store `status_`, so they were
+    // invisible to the index. Querying PK="ORG" works regardless.
     const orgsResponse = await docClient.send(
       new QueryCommand({
         TableName: tableName,
-        IndexName: "EntityTypeIndex",
-        KeyConditionExpression: "entityType = :entityType",
-        ExpressionAttributeValues: { ":entityType": "ORG" },
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :sk)",
+        ExpressionAttributeValues: {
+          ":pk": "ORG",
+          ":sk": "ORG#",
+        },
         Limit: 200,
       }),
     );
 
-    const orgs = (orgsResponse.Items || []).filter((item) =>
-      String(item.SK || "").startsWith("ORG#"),
+    // Filter out the internal "platform" org — that's the
+    // superadmin's personal workspace, not something to manage in
+    // the cross-org view. Demo and customer orgs do appear.
+    const orgs = (orgsResponse.Items || []).filter(
+      (item) => !item.isInternal,
     );
 
     // For each org, compute member + system counts. Two queries each

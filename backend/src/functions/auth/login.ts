@@ -1,6 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import {
   GetCommand,
+  PutCommand,
   QueryCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
@@ -173,9 +174,60 @@ export const login = async (
       }
     }
 
-    // Resolve org name (best-effort).
+    // Auto-provision the "platform" org for superadmins on first
+    // login. The seed script also handles this, but we mirror it
+    // here so the system works without re-running seed.
+    let orgId = (user.orgId as string | undefined) || undefined;
+    if (
+      String(user.role || "") === "superadmin" &&
+      (!orgId || orgId === "")
+    ) {
+      const platformOrgId = "platform";
+      try {
+        const existing: any = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "ORG", SK: `ORG#${platformOrgId}` },
+          }),
+        );
+        if (!existing.Item) {
+          await docClient.send(
+            new PutCommand({
+              TableName: tableName,
+              Item: {
+                PK: "ORG",
+                SK: `ORG#${platformOrgId}`,
+                entityType: "ORG",
+                status_: "Active",
+                id: platformOrgId,
+                name: "Platform (Superadmin)",
+                slug: "platform",
+                ownerId: user.id,
+                createDate: new Date().toISOString(),
+                isInternal: true,
+              },
+            }),
+          );
+        }
+        await docClient.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { PK: user.PK, SK: user.SK },
+            UpdateExpression: "SET orgId = :orgId",
+            ExpressionAttributeValues: { ":orgId": platformOrgId },
+          }),
+        );
+        orgId = platformOrgId;
+        (user as any).orgId = platformOrgId;
+      } catch (provisionErr) {
+        console.warn(
+          "Superadmin platform-org auto-provision failed:",
+          provisionErr,
+        );
+      }
+    }
+
     let orgName: string | undefined;
-    const orgId = (user.orgId as string | undefined) || undefined;
     if (orgId) {
       try {
         const orgResponse = await docClient.send(
