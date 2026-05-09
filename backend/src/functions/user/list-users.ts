@@ -1,8 +1,16 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
-import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
+import {
+  canInviteRole,
+  isAdminOrSuper,
+  isSuperAdmin,
+} from "../../utils/rbac.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
+
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const listUsers = async (
   event: APIGatewayProxyEvent,
@@ -24,12 +32,35 @@ export const listUsers = async (
           (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
 
+    const userId =
+      (event.headers &&
+        ((event.headers["x-user-id"] as string) ||
+          (event.headers["X-User-Id"] as string))) ||
+      undefined;
+
     if (!isAdminOrSuper(inviterRole as any)) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({ message: "forbidden" }),
       };
+    }
+
+    // Resolve actor's org from DB.
+    let actorOrgId: string | undefined;
+    let actorRole = inviterRole;
+    if (userId) {
+      try {
+        const actorResponse: any = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "USER", SK: `USER#${userId}` },
+          }),
+        );
+        const u = actorResponse.Item || {};
+        actorOrgId = u.orgId as string | undefined;
+        actorRole = (u.role as string | undefined) || actorRole;
+      } catch {}
     }
 
     const limit = Number(event.queryStringParameters?.limit || 100);
@@ -47,9 +78,18 @@ export const listUsers = async (
       }),
     );
 
+    const scopedOrgId = isSuperAdmin(actorRole as any)
+      ? null
+      : actorOrgId || DEMO_ORG_ID;
+
     const users = (result.Items || [])
       .filter((item) => String(item.SK || "").startsWith("USER#"))
-      .filter((item) => canInviteRole(inviterRole as any, item.role as any))
+      // Hide ephemeral demo session accounts from regular admin lists.
+      .filter((item) => !item.demoMode)
+      .filter((item) => canInviteRole(actorRole as any, item.role as any))
+      .filter((item) =>
+        scopedOrgId === null ? true : effectiveOrgId(item.orgId) === scopedOrgId,
+      )
       .map((item) => ({
         id: item.id,
         email: item.email,
@@ -60,6 +100,7 @@ export const listUsers = async (
         allowedSystemIds: Array.isArray(item.allowedSystemIds)
           ? item.allowedSystemIds
           : [],
+        orgId: effectiveOrgId(item.orgId),
       }));
 
     return {

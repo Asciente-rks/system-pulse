@@ -1,4 +1,5 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { parse } from "../../utils/parse.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { createHealthSchema } from "../../validation/health-schema.js";
@@ -7,6 +8,8 @@ import { createHealthService } from "../../services/health-service.js";
 import type { CreateHealthInput } from "../../types/health.js";
 import { isAdminOrSuper } from "../../utils/rbac.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { rejectIfDemo } from "../../utils/actor-auth.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
 
 export const createHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -42,6 +45,12 @@ export const createHealthCheck = async (
           (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
 
+    const actorUserId =
+      (event.headers &&
+        ((event.headers["x-user-id"] as string) ||
+          (event.headers["X-User-Id"] as string))) ||
+      undefined;
+
     if (!isAdminOrSuper(inviterRole as any)) {
       return {
         statusCode: 403,
@@ -53,12 +62,41 @@ export const createHealthCheck = async (
       };
     }
 
+    // Resolve actor for org scoping + demo guard.
+    let actorOrgId: string | undefined;
+    let actorIsDemo = false;
+    if (actorUserId) {
+      try {
+        const actorResponse: any = await docClient.send(
+          new GetCommand({
+            TableName: process.env.USERS_TABLE!,
+            Key: { PK: "USER", SK: `USER#${actorUserId}` },
+          }),
+        );
+        const u = actorResponse.Item || {};
+        actorOrgId = u.orgId as string | undefined;
+        actorIsDemo = Boolean(u.demoMode);
+      } catch {}
+    }
+
+    // Demo sessions are sandboxed: they may CREATE systems in the demo
+    // org (so reviewers can test the create flow), but the system is
+    // pinned to the demo org and cannot escape it.
     const validated = (await createHealthSchema.validate(body, {
       stripUnknown: true,
     })) as CreateHealthInput;
 
     const service = createHealthService(docClient, tableName);
-    const item = await service.createHealthCheck(validated);
+    const ownerOrgId = actorOrgId || DEMO_ORG_ID;
+    // Demo admins are allowed to create demo-scoped systems. We do
+    // NOT call rejectIfDemo here so reviewers can exercise the
+    // "Create System" button.
+    void rejectIfDemo;
+
+    const item = await service.createHealthCheck({
+      ...validated,
+      orgId: actorIsDemo ? DEMO_ORG_ID : ownerOrgId,
+    } as CreateHealthInput);
 
     return {
       statusCode: 201,

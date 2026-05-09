@@ -1,5 +1,5 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
-import { QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
@@ -90,6 +90,24 @@ export const login = async (
       };
     }
 
+    // Resolve the org name (best-effort: org may be null for the
+    // platform-level superadmin).
+    let orgName: string | undefined;
+    const orgId = (user.orgId as string | undefined) || undefined;
+    if (orgId) {
+      try {
+        const orgResponse = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "ORG", SK: `ORG#${orgId}` },
+          }),
+        );
+        orgName = (orgResponse.Item as { name?: string } | undefined)?.name;
+      } catch (orgError) {
+        console.warn("Org lookup failed during login:", orgError);
+      }
+    }
+
     return {
       statusCode: 200,
       headers,
@@ -105,6 +123,9 @@ export const login = async (
           allowedSystemIds: Array.isArray(user.allowedSystemIds)
             ? user.allowedSystemIds
             : [],
+          orgId,
+          orgName,
+          demoMode: Boolean(user.demoMode),
         },
       }),
     };

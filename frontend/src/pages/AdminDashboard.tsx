@@ -26,20 +26,19 @@ type AdminTab = "overview" | "systems" | "users";
 
 const USERS_PER_PAGE = 5;
 
-// Copy shown to admins explaining why their delete buttons are locked.
-// (Superadmins never see this — their deletion buttons are unlocked.)
-const DELETION_DISABLED_NOTE =
-  "Only the super admin can delete users or systems.";
+// Demo accounts can browse the entire admin surface but cannot
+// destroy data. Plain (non-demo) admins CAN delete inside their own
+// org now that the platform is multi-tenant.
+const DEMO_DISABLED_NOTE =
+  "Demo mode is read-mostly. Sign up for a free account to delete data.";
 
 export default function AdminDashboard() {
-  const { user } = useAuth();
+  const { user, isDemo } = useAuth();
 
-  // Role-aware delete gate. Plain admins still see the dashboard but their
-  // delete controls remain disabled — same UX as before, just no longer
-  // applied to superadmins. The backend (delete-user / delete-system)
-  // enforces the same rule independently, so flipping this flag client-
-  // side wouldn't grant a malicious admin actual delete capability.
-  const DELETION_DISABLED = user?.role !== "superadmin";
+  // Real org admins delete inside their own org. Demo admins are
+  // blocked. Superadmin always allowed. The backend enforces the
+  // same rule independently.
+  const DELETION_DISABLED = !user || isDemo;
 
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [users, setUsers] = useState<SessionUser[]>([]);
@@ -50,7 +49,9 @@ export default function AdminDashboard() {
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
-  const [inviteRole, setInviteRole] = useState<"admin" | "tester">("tester");
+  const [inviteRole, setInviteRole] = useState<"admin" | "user" | "tester">(
+    "user",
+  );
 
   const [systemName, setSystemName] = useState("");
   const [systemUrl, setSystemUrl] = useState("");
@@ -85,10 +86,10 @@ export default function AdminDashboard() {
 
   const inviteRoleOptions = useMemo(() => {
     if (user?.role === "superadmin") {
-      return ["admin", "tester"] as const;
+      return ["admin", "user", "tester"] as const;
     }
 
-    return ["tester"] as const;
+    return ["user", "tester"] as const;
   }, [user?.role]);
 
   const totalUserPages = Math.max(1, Math.ceil(users.length / USERS_PER_PAGE));
@@ -418,9 +419,23 @@ export default function AdminDashboard() {
 
   return (
     <div className="stack-lg">
+      {isDemo && (
+        <section className="panel" style={{ borderColor: "#7d4eff" }}>
+          <p className="panel-title" style={{ marginBottom: 6 }}>
+            🧪 Demo mode active
+          </p>
+          <p className="panel-copy compact-copy">
+            You're exploring real systems with destructive actions disabled.
+            Sign up for a free organization to add systems you actually own.
+          </p>
+        </section>
+      )}
+
       <section className="panel panel-hero">
         <div>
-          <h2 className="panel-title">Admin Command Center</h2>
+          <h2 className="panel-title">
+            {user?.orgName ? `${user.orgName} — Admin Command Center` : "Admin Command Center"}
+          </h2>
           <p className="panel-copy">
             Manage users, systems, and health workflows with role-aware controls
             and secure deletion safeguards.
@@ -585,7 +600,7 @@ export default function AdminDashboard() {
                       }
                       disabled={DELETION_DISABLED}
                       title={
-                        DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                        DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
                       }
                     >
                       Delete
@@ -789,7 +804,7 @@ export default function AdminDashboard() {
 
               {DELETION_DISABLED && (
                 <p className="deletion-locked-note" role="status">
-                  🔒 {DELETION_DISABLED_NOTE}
+                  🔒 {DEMO_DISABLED_NOTE}
                 </p>
               )}
 
@@ -825,7 +840,7 @@ export default function AdminDashboard() {
                 onClick={handleDeleteUser}
                 disabled={DELETION_DISABLED || busy === "delete-user"}
                 title={
-                  DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                  DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
                 }
               >
                 {busy === "delete-user" ? "Deleting..." : "Delete User"}
@@ -846,7 +861,7 @@ export default function AdminDashboard() {
 
             {DELETION_DISABLED && (
               <p className="deletion-locked-note" role="status">
-                🔒 {DELETION_DISABLED_NOTE}
+                🔒 {DEMO_DISABLED_NOTE}
               </p>
             )}
 
@@ -879,7 +894,7 @@ export default function AdminDashboard() {
                 onClick={handleDeleteSystem}
                 disabled={DELETION_DISABLED || busy === "delete-system"}
                 title={
-                  DELETION_DISABLED ? DELETION_DISABLED_NOTE : undefined
+                  DELETION_DISABLED ? DEMO_DISABLED_NOTE : undefined
                 }
               >
                 {busy === "delete-system" ? "Deleting..." : "Delete System"}

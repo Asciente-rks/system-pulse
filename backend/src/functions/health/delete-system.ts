@@ -8,12 +8,17 @@ import {
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
-import { isSuperAdmin } from "../../utils/rbac.js";
+import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
 import {
   getActorUserId,
+  rejectIfDemo,
   requireAdminActorPassword,
 } from "../../utils/actor-auth.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
+
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const deleteSystem = async (
   event: APIGatewayProxyEvent,
@@ -62,15 +67,15 @@ export const deleteSystem = async (
       actorPassword,
     );
 
-    // System-deletion is locked to superadmin. Plain admins are admins for
-    // the rest of the surface (invite/manage testers, trigger health) but
-    // explicitly NOT for destroying registered systems.
-    if (!isSuperAdmin(actor.role as any)) {
+    // Demo sessions are blocked from deleting any system.
+    rejectIfDemo(actor as any);
+
+    if (!isAdminOrSuper(actor.role as any)) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({
-          message: "forbidden - only superadmin may delete systems",
+          message: "forbidden - admin or superadmin required",
         }),
       };
     }
@@ -88,6 +93,36 @@ export const deleteSystem = async (
         headers,
         body: JSON.stringify({ message: "system not found" }),
       };
+    }
+
+    const targetSystem = systemResponse.Item as { orgId?: string };
+    const targetOrgId = effectiveOrgId(targetSystem.orgId);
+
+    // Plain admins may delete only systems within their own org.
+    // Superadmins may delete any system. The demo org is read-only
+    // for ALL admins (the platform owner's data).
+    if (!isSuperAdmin(actor.role as any)) {
+      const actorOrgId = actor.orgId || DEMO_ORG_ID;
+      if (actorOrgId !== targetOrgId) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({
+            message:
+              "forbidden - cannot delete systems outside your organization",
+          }),
+        };
+      }
+      if (targetOrgId === DEMO_ORG_ID) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({
+            message:
+              "forbidden - the demo org's systems are read-only for all admins",
+          }),
+        };
+      }
     }
 
     await docClient.send(

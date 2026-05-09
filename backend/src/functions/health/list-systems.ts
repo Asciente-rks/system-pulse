@@ -2,8 +2,9 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { GetCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
-import { isAdminOrSuper } from "../../utils/rbac.js";
+import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
 import { resolveDeploymentMode } from "../../utils/health-workflow.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
 
 type HealthSystemRecord = {
   id: string;
@@ -15,7 +16,16 @@ type HealthSystemRecord = {
   lastChecked?: string;
   lastResponseCode?: number;
   responseTimeMs?: number;
+  orgId?: string;
 };
+
+/**
+ * Treat any system without an orgId as belonging to the demo org.
+ * This keeps backwards compatibility with the original single-tenant
+ * data set (the platform owner's personal projects).
+ */
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const listSystems = async (
   event: APIGatewayProxyEvent,
@@ -68,9 +78,37 @@ export const listSystems = async (
       lastChecked: item.lastChecked,
       lastResponseCode: item.lastResponseCode,
       responseTimeMs: item.responseTimeMs,
+      orgId: effectiveOrgId(item.orgId),
     })) as HealthSystemRecord[];
 
-    if (!isAdminOrSuper(inviterRole as any)) {
+    // Resolve actor for org scoping. Headers are advisory; the DB
+    // record is the source of truth.
+    let actorOrgId: string | undefined;
+    let actorRole: string | undefined = inviterRole;
+    let actorAllowedSystems: string[] = [];
+    let actorIsActive = true;
+
+    if (userId) {
+      try {
+        const userResponse: any = await docClient.send(
+          new GetCommand({
+            TableName: process.env.USERS_TABLE!,
+            Key: { PK: "USER", SK: `USER#${userId}` },
+          }),
+        );
+        const u = userResponse.Item || {};
+        actorOrgId = u.orgId as string | undefined;
+        actorRole = (u.role as string | undefined) || actorRole;
+        actorAllowedSystems = Array.isArray(u.allowedSystemIds)
+          ? u.allowedSystemIds
+          : [];
+        actorIsActive = u.status_ === "Active";
+      } catch (lookupError) {
+        console.warn("list-systems: actor lookup failed", lookupError);
+      }
+    }
+
+    if (!isAdminOrSuper(actorRole as any)) {
       if (!userId) {
         return {
           statusCode: 403,
@@ -79,19 +117,7 @@ export const listSystems = async (
         };
       }
 
-      const userResponse: any = await docClient.send(
-        new GetCommand({
-          TableName: process.env.USERS_TABLE!,
-          Key: { PK: "USER", SK: `USER#${userId}` },
-        }),
-      );
-
-      const user = userResponse.Item || {};
-      const allowedSystemIds = Array.isArray(user.allowedSystemIds)
-        ? (user.allowedSystemIds as string[])
-        : [];
-
-      if (user.status_ !== "Active") {
+      if (!actorIsActive) {
         return {
           statusCode: 403,
           headers,
@@ -99,10 +125,23 @@ export const listSystems = async (
         };
       }
 
-      systems = systems.filter((system) =>
-        allowedSystemIds.includes(system.id),
-      );
+      // Org members see only systems within their org AND that they have
+      // been explicitly granted access to. Demo `user` role implicitly
+      // gets access to every demo system (it's a sandbox).
+      const scopedOrgId = actorOrgId || DEMO_ORG_ID;
+      systems = systems.filter((system) => system.orgId === scopedOrgId);
+
+      if (scopedOrgId !== DEMO_ORG_ID) {
+        systems = systems.filter((system) =>
+          actorAllowedSystems.includes(system.id),
+        );
+      }
+    } else if (!isSuperAdmin(actorRole as any)) {
+      // Plain admin: scoped to own org. Demo admins see only the demo org.
+      const scopedOrgId = actorOrgId || DEMO_ORG_ID;
+      systems = systems.filter((system) => system.orgId === scopedOrgId);
     }
+    // Superadmin: cross-org visibility, no filter.
 
     return {
       statusCode: 200,

@@ -1206,3 +1206,15 @@ select.field-input {
   letter-spacing: 0.01em;
   line-height: 1.4;
 }
+
+/* Inline-link button used in registration flow (back-step prompt). */
+.link-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+}

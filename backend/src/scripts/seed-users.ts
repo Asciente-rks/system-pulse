@@ -1,8 +1,13 @@
 import "dotenv/config";
 import { DescribeTableCommand, DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  PutCommand,
+  QueryCommand,
+  UpdateCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../config/db.js";
 import { scryptSync, randomBytes } from "crypto";
+import { DEMO_ORG_ID } from "../types/organization.js";
 
 async function seed() {
   const tableName =
@@ -35,6 +40,33 @@ async function seed() {
   const now = new Date().toISOString();
   let failureCount = 0;
 
+  // 1) Demo organization (hosts the platform owner's personal projects).
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: tableName,
+        Item: {
+          PK: "ORG",
+          SK: `ORG#${DEMO_ORG_ID}`,
+          entityType: "ORG",
+          id: DEMO_ORG_ID,
+          name: "System Pulse Demo",
+          slug: "demo",
+          isDemo: true,
+          ownerId: "seed-superadmin",
+          createDate: now,
+        },
+      }),
+    );
+    console.log("Seeded demo organization");
+  } catch (err) {
+    console.error("Failed to seed demo organization:", err);
+    failureCount += 1;
+  }
+
+  // 2) Seed users (kept for backwards compatibility with existing
+  //    quick-login dev tools). All scoped to the demo org so the
+  //    classic "Tester" / "Admin" buttons land inside the showcase.
   const users = [
     {
       id: "seed-superadmin",
@@ -44,6 +76,7 @@ async function seed() {
       status_: "Active",
       createDate: now,
       allowedSystemIds: [],
+      // Superadmin is platform-wide; no orgId needed.
     },
     {
       id: "seed-admin",
@@ -53,6 +86,7 @@ async function seed() {
       status_: "Active",
       createDate: now,
       allowedSystemIds: [],
+      orgId: DEMO_ORG_ID,
     },
     {
       id: "seed-tester",
@@ -62,6 +96,7 @@ async function seed() {
       status_: "Active",
       createDate: now,
       allowedSystemIds: [],
+      orgId: DEMO_ORG_ID,
     },
   ];
 
@@ -82,6 +117,7 @@ async function seed() {
       passwordHash,
       createDate: u.createDate,
       allowedSystemIds: u.allowedSystemIds,
+      ...(u.orgId ? { orgId: u.orgId } : {}),
     } as any;
 
     try {
@@ -98,8 +134,57 @@ async function seed() {
     }
   }
 
+  // 3) Backfill orgId on any pre-existing systems so they show up
+  //    correctly in the demo org. New systems created via the SaaS
+  //    flow already carry orgId; this only patches legacy data.
+  let lastEvaluatedKey: Record<string, unknown> | undefined;
+  let backfilledSystems = 0;
+
+  do {
+    const response = await docClient.send(
+      new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: "PK = :pk AND begins_with(SK, :skPrefix)",
+        ExpressionAttributeValues: {
+          ":pk": "SYSTEM",
+          ":skPrefix": "SYS#",
+        },
+        ExclusiveStartKey: lastEvaluatedKey,
+        Limit: 200,
+      }),
+    );
+
+    for (const item of response.Items || []) {
+      if ((item as { orgId?: string }).orgId) continue;
+
+      try {
+        await docClient.send(
+          new UpdateCommand({
+            TableName: tableName,
+            Key: { PK: item.PK, SK: item.SK },
+            UpdateExpression: "SET orgId = :orgId",
+            ExpressionAttributeValues: { ":orgId": DEMO_ORG_ID },
+          }),
+        );
+        backfilledSystems += 1;
+      } catch (err) {
+        console.error(
+          `Failed to backfill orgId on system ${item.SK}:`,
+          err,
+        );
+        failureCount += 1;
+      }
+    }
+
+    lastEvaluatedKey = response.LastEvaluatedKey as
+      | Record<string, unknown>
+      | undefined;
+  } while (lastEvaluatedKey);
+
+  console.log(`Backfilled orgId on ${backfilledSystems} legacy system(s).`);
+
   if (failureCount > 0) {
-    throw new Error(`Seeding failed for ${failureCount} user(s)`);
+    throw new Error(`Seeding had ${failureCount} failure(s)`);
   }
 
   console.log("Seeding complete");

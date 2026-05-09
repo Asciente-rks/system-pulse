@@ -4,6 +4,7 @@ import type { SessionUser } from "../services/api";
 interface AuthContextValue {
   user: SessionUser | null;
   isAuthenticated: boolean;
+  isDemo: boolean;
   signIn: (nextUser: SessionUser) => void;
   signOut: () => void;
 }
@@ -24,9 +25,33 @@ function loadUserFromStorage(): SessionUser | null {
     localStorage.removeItem(SESSION_STORAGE_KEY);
     localStorage.removeItem("role");
     localStorage.removeItem("userId");
+    localStorage.removeItem("orgId");
+    localStorage.removeItem("demoMode");
     return null;
   }
 }
+
+const persistAuxFields = (nextUser: SessionUser) => {
+  localStorage.setItem("role", nextUser.role);
+  localStorage.setItem("userId", nextUser.id);
+  if (nextUser.orgId) {
+    localStorage.setItem("orgId", nextUser.orgId);
+  } else {
+    localStorage.removeItem("orgId");
+  }
+  if (nextUser.demoMode) {
+    localStorage.setItem("demoMode", "true");
+  } else {
+    localStorage.removeItem("demoMode");
+  }
+};
+
+const clearAuxFields = () => {
+  localStorage.removeItem("role");
+  localStorage.removeItem("userId");
+  localStorage.removeItem("orgId");
+  localStorage.removeItem("demoMode");
+};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(() =>
@@ -37,17 +62,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       user,
       isAuthenticated: Boolean(user),
+      isDemo: Boolean(user?.demoMode),
       signIn: (nextUser) => {
         setUser(nextUser);
         localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
-        localStorage.setItem("role", nextUser.role);
-        localStorage.setItem("userId", nextUser.id);
+        persistAuxFields(nextUser);
       },
       signOut: () => {
         setUser(null);
         localStorage.removeItem(SESSION_STORAGE_KEY);
-        localStorage.removeItem("role");
-        localStorage.removeItem("userId");
+        clearAuxFields();
       },
     }),
     [user],

@@ -3,12 +3,17 @@ import { DeleteCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../config/db.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { parse } from "../../utils/parse.js";
-import { isSuperAdmin } from "../../utils/rbac.js";
+import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
 import {
   getActorUserId,
+  rejectIfDemo,
   requireAdminActorPassword,
 } from "../../utils/actor-auth.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
+
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const deleteUser = async (
   event: APIGatewayProxyEvent,
@@ -54,17 +59,20 @@ export const deleteUser = async (
       actorPassword,
     );
 
-    // User-deletion is locked to superadmin. Plain admins still pass the
-    // requireAdminActorPassword gate above (other admin endpoints rely on
-    // it), so we re-check here. Without this, an admin could call DELETE
-    // /users/<tester-id> and succeed via canInviteRole — we explicitly do
-    // not want that.
-    if (!isSuperAdmin(actor.role as any)) {
+    // Demo sessions are blocked from deleting users — even admins of
+    // the demo org. The platform owner remains the only one who can
+    // permanently destroy accounts.
+    rejectIfDemo(actor as any);
+
+    // Org admins may delete users WITHIN their own org. Superadmins
+    // may delete any user. We loosen the original superadmin-only
+    // gate now that deletion is org-scoped.
+    if (!isAdminOrSuper(actor.role as any)) {
       return {
         statusCode: 403,
         headers,
         body: JSON.stringify({
-          message: "forbidden - only superadmin may delete users",
+          message: "forbidden - admin or superadmin required",
         }),
       };
     }
@@ -84,7 +92,9 @@ export const deleteUser = async (
       }),
     );
 
-    const target = targetResponse.Item as { role?: string } | undefined;
+    const target = targetResponse.Item as
+      | { role?: string; orgId?: string; demoMode?: boolean }
+      | undefined;
 
     if (!target) {
       return {
@@ -92,6 +102,34 @@ export const deleteUser = async (
         headers,
         body: JSON.stringify({ message: "user not found" }),
       };
+    }
+
+    // Org-isolation: a plain admin can ONLY delete users in their own
+    // org. Superadmin is unrestricted.
+    if (!isSuperAdmin(actor.role as any)) {
+      const actorOrgId = actor.orgId || DEMO_ORG_ID;
+      const targetOrgId = effectiveOrgId(target.orgId);
+      if (actorOrgId !== targetOrgId) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({
+            message: "forbidden - cannot delete users outside your organization",
+          }),
+        };
+      }
+
+      // Plain admins are NOT allowed to delete other admins, only org
+      // members. (Prevents an admin booting another admin in the same org.)
+      if (target.role === "admin" || target.role === "superadmin") {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({
+            message: "forbidden - cannot delete admin or superadmin",
+          }),
+        };
+      }
     }
 
     await docClient.send(

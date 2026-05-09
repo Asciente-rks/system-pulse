@@ -1,4 +1,5 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { parse } from "../../utils/parse.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { createUserSchema } from "../../validation/user-validation.js";
@@ -9,6 +10,8 @@ import type { CreateUserInput } from "../../types/user.js";
 import { sendInviteEmail } from "../../services/email-service.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
 import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
+import { rejectIfDemo } from "../../utils/actor-auth.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
 
 export const createUserInvitation = async (
   event: APIGatewayProxyEvent,
@@ -46,6 +49,13 @@ export const createUserInvitation = async (
         ((event.headers["x-inviter-role"] as string) ||
           (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
+
+    const actorUserId =
+      (event.headers &&
+        ((event.headers["x-user-id"] as string) ||
+          (event.headers["X-User-Id"] as string))) ||
+      undefined;
+
     if (!canInviteRole(inviterRole as any, validated.role)) {
       return {
         statusCode: 403,
@@ -72,9 +82,33 @@ export const createUserInvitation = async (
       };
     }
 
+    // Resolve actor for org scoping + demo guard.
+    let actorOrgId: string | undefined;
+    let actorRecord: Record<string, unknown> = {};
+    if (actorUserId) {
+      try {
+        const actorResponse = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "USER", SK: `USER#${actorUserId}` },
+          }),
+        );
+        actorRecord = (actorResponse.Item as Record<string, unknown>) || {};
+        actorOrgId = (actorRecord.orgId as string | undefined) || undefined;
+      } catch {}
+    }
+
+    // Demo sessions cannot persist new invitations into the platform.
+    rejectIfDemo(actorRecord as any);
+
     const service = createUserService(docClient, tableName);
+    const orgIdForNewUser = actorOrgId || DEMO_ORG_ID;
+
     const { user, inviteToken, inviteEligibilityExpiresAt } =
-      await service.createUserInvitation(validated);
+      await service.createUserInvitation({
+        ...validated,
+        orgId: orgIdForNewUser,
+      });
 
     const frontend = resolveFrontendBaseUrl(event.headers);
     const inviteLink = `${frontend}/accept-invite?token=${inviteToken}`;

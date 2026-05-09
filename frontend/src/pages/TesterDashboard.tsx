@@ -5,6 +5,7 @@ import {
   triggerHealth,
   type SystemSummary,
 } from "../services/api";
+import { useAuth } from "../hooks/useAuth";
 import {
   getSystemHealthStatus,
   normalizeHealthStatus,
@@ -14,6 +15,7 @@ import {
 type TesterTab = "systems" | "logs";
 
 export default function TesterDashboard() {
+  const { user, isDemo } = useAuth();
   const [activeTab, setActiveTab] = useState<TesterTab>("systems");
   const [systems, setSystems] = useState<SystemSummary[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -161,8 +163,23 @@ export default function TesterDashboard() {
 
   return (
     <div className="stack-lg">
+      {isDemo && (
+        <section className="panel" style={{ borderColor: "#7d4eff" }}>
+          <p className="panel-title" style={{ marginBottom: 6 }}>
+            🧪 Demo mode active
+          </p>
+          <p className="panel-copy compact-copy">
+            You're exploring real systems. Triggering checks and viewing logs
+            works exactly like a real tester. Sign up to track your own
+            systems.
+          </p>
+        </section>
+      )}
+
       <section className="panel panel-hero">
-        <h2 className="panel-title">Tester Dashboard</h2>
+        <h2 className="panel-title">
+          {user?.orgName ? `${user.orgName} — Tester Dashboard` : "Tester Dashboard"}
+        </h2>
         <p className="panel-copy">
           Trigger health checks for your assigned systems. Render systems use an
           automatic delayed recheck; standard systems run a single-pass check.

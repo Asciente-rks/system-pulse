@@ -9,6 +9,9 @@ interface ActorRecord {
   role: string;
   status_: string;
   passwordHash?: string;
+  orgId?: string;
+  demoMode?: boolean;
+  allowedSystemIds?: string[];
 }
 
 export function getActorUserId(event: APIGatewayProxyEvent): string {
@@ -17,6 +20,61 @@ export function getActorUserId(event: APIGatewayProxyEvent): string {
     (event.headers["X-User-Id"] as string) ||
     ""
   );
+}
+
+export function getActorRole(event: APIGatewayProxyEvent): string | undefined {
+  return (
+    (event.headers["x-inviter-role"] as string) ||
+    (event.headers["X-Inviter-Role"] as string) ||
+    undefined
+  );
+}
+
+export function getActorOrgIdHeader(
+  event: APIGatewayProxyEvent,
+): string | undefined {
+  return (
+    (event.headers["x-org-id"] as string) ||
+    (event.headers["X-Org-Id"] as string) ||
+    undefined
+  );
+}
+
+/**
+ * Load the actor row from the DB. Used as the source of truth for
+ * orgId, role, and demoMode. Headers are advisory; never trust them
+ * for authorization decisions on their own.
+ */
+export async function loadActor(
+  docClient: DynamoDBDocumentClient,
+  usersTableName: string,
+  actorUserId: string,
+): Promise<ActorRecord | null> {
+  if (!actorUserId) return null;
+
+  const response = await docClient.send(
+    new GetCommand({
+      TableName: usersTableName,
+      Key: { PK: "USER", SK: `USER#${actorUserId}` },
+    }),
+  );
+
+  return (response.Item as ActorRecord | undefined) || null;
+}
+
+export async function requireActiveActor(
+  docClient: DynamoDBDocumentClient,
+  usersTableName: string,
+  actorUserId: string,
+): Promise<ActorRecord> {
+  const actor = await loadActor(docClient, usersTableName, actorUserId);
+  if (!actor) {
+    throw new HttpError(403, { message: "forbidden - actor not found" });
+  }
+  if (actor.status_ !== "Active") {
+    throw new HttpError(403, { message: "forbidden - actor is not active" });
+  }
+  return actor;
 }
 
 export async function requireAdminActorPassword(
@@ -33,14 +91,7 @@ export async function requireAdminActorPassword(
     throw new HttpError(400, { message: "actorPassword is required" });
   }
 
-  const actorResponse = await docClient.send(
-    new GetCommand({
-      TableName: usersTableName,
-      Key: { PK: "USER", SK: `USER#${actorUserId}` },
-    }),
-  );
-
-  const actor = actorResponse.Item as ActorRecord | undefined;
+  const actor = await loadActor(docClient, usersTableName, actorUserId);
 
   if (!actor) {
     throw new HttpError(403, { message: "forbidden - actor not found" });
@@ -59,4 +110,18 @@ export async function requireAdminActorPassword(
   }
 
   return actor;
+}
+
+/**
+ * Throw a 403 if the actor is in demo mode. Used to harden destructive
+ * endpoints where demo testers should never be allowed to mutate the
+ * platform owner's data.
+ */
+export function rejectIfDemo(actor: ActorRecord): void {
+  if (actor.demoMode) {
+    throw new HttpError(403, {
+      message:
+        "Demo mode is read-mostly. Sign up for a free account to delete or destructively modify data.",
+    });
+  }
 }

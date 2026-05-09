@@ -3,9 +3,18 @@ import { parse } from "../../utils/parse.js";
 import { handleError, headers } from "../../utils/error-handler.js";
 import { docClient } from "../../config/db.js";
 import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
-import { canInviteRole, isAdminOrSuper } from "../../utils/rbac.js";
+import {
+  canInviteRole,
+  canSeeOrg,
+  isAdminOrSuper,
+} from "../../utils/rbac.js";
 import { USER_STATUSES } from "../../types/user.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { rejectIfDemo } from "../../utils/actor-auth.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
+
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const assignSystemAccess = async (
   event: APIGatewayProxyEvent,
@@ -33,6 +42,12 @@ export const assignSystemAccess = async (
         ((event.headers["x-inviter-role"] as string) ||
           (event.headers["X-Inviter-Role"] as string))) ||
       undefined;
+    const actorUserId =
+      (event.headers &&
+        ((event.headers["x-user-id"] as string) ||
+          (event.headers["X-User-Id"] as string))) ||
+      undefined;
+
     if (!isAdminOrSuper(inviterRole as any)) {
       return {
         statusCode: 403,
@@ -70,6 +85,23 @@ export const assignSystemAccess = async (
       };
     }
 
+    // Resolve actor
+    let actorOrgId: string | undefined;
+    let actorRecord: Record<string, unknown> = {};
+    if (actorUserId) {
+      try {
+        const actorResponse = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "USER", SK: `USER#${actorUserId}` },
+          }),
+        );
+        actorRecord = (actorResponse.Item as Record<string, unknown>) || {};
+        actorOrgId = actorRecord.orgId as string | undefined;
+      } catch {}
+    }
+    rejectIfDemo(actorRecord as any);
+
     const targetUserResponse = await docClient.send(
       new GetCommand({
         TableName: tableName,
@@ -77,7 +109,9 @@ export const assignSystemAccess = async (
       }),
     );
 
-    const targetUser = targetUserResponse.Item as { role?: string } | undefined;
+    const targetUser = targetUserResponse.Item as
+      | { role?: string; orgId?: string }
+      | undefined;
 
     if (!targetUser) {
       return {
@@ -92,6 +126,20 @@ export const assignSystemAccess = async (
         statusCode: 403,
         headers,
         body: JSON.stringify({ message: "forbidden - out of role scope" }),
+      };
+    }
+
+    if (
+      !canSeeOrg(
+        inviterRole as any,
+        actorOrgId,
+        effectiveOrgId(targetUser.orgId),
+      )
+    ) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({ message: "forbidden - out of org scope" }),
       };
     }
 

@@ -4,7 +4,7 @@ import { docClient } from "../../config/db.js";
 import { enqueueHealthCheck } from "../../services/queue-service.js";
 import { invokeHealthWorker } from "../../services/worker-invoke-service.js";
 import { handleError, headers } from "../../utils/error-handler.js";
-import { isAdminOrSuper } from "../../utils/rbac.js";
+import { isAdminOrSuper, isSuperAdmin } from "../../utils/rbac.js";
 import type { HealthCheckQueueMessage } from "../../types/health-events.js";
 import { parse } from "../../utils/parse.js";
 import {
@@ -12,6 +12,10 @@ import {
   shouldUseRenderWakeupWorkflow,
 } from "../../utils/health-workflow.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
+import { DEMO_ORG_ID } from "../../types/organization.js";
+
+const effectiveOrgId = (orgId?: unknown): string =>
+  typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
 
 export const triggerHealthCheck = async (
   event: APIGatewayProxyEvent,
@@ -63,36 +67,27 @@ export const triggerHealthCheck = async (
           (event.headers["X-User-Id"] as string))) ||
       undefined;
 
-    if (!isAdminOrSuper(inviterRole as any)) {
-      if (!userId)
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ message: "forbidden - user id required" }),
-        };
-      const userRes: any = await docClient.send(
-        new GetCommand({
-          TableName: process.env.USERS_TABLE!,
-          Key: { PK: "USER", SK: `USER#${userId}` },
-        }),
-      );
-
-      const user = userRes.Item || {};
-      const allowed: string[] = user.allowedSystemIds || [];
-      if (user.status_ !== "Active") {
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ message: "forbidden - user is not active" }),
-        };
-      }
-
-      if (!allowed.includes(systemId))
-        return {
-          statusCode: 403,
-          headers,
-          body: JSON.stringify({ message: "forbidden - no access to system" }),
-        };
+    // Resolve actor (DB-of-record)
+    let actorOrgId: string | undefined;
+    let actorRole = inviterRole;
+    let actorAllowed: string[] = [];
+    let actorIsActive = true;
+    if (userId) {
+      try {
+        const userRes: any = await docClient.send(
+          new GetCommand({
+            TableName: process.env.USERS_TABLE!,
+            Key: { PK: "USER", SK: `USER#${userId}` },
+          }),
+        );
+        const u = userRes.Item || {};
+        actorOrgId = u.orgId as string | undefined;
+        actorRole = (u.role as string | undefined) || actorRole;
+        actorAllowed = Array.isArray(u.allowedSystemIds)
+          ? u.allowedSystemIds
+          : [];
+        actorIsActive = u.status_ === "Active";
+      } catch {}
     }
 
     const sRes: any = await docClient.send(
@@ -108,6 +103,47 @@ export const triggerHealthCheck = async (
         headers,
         body: JSON.stringify({ message: "system not found" }),
       };
+
+    const systemOrgId = effectiveOrgId(system.orgId);
+
+    if (!isSuperAdmin(actorRole as any)) {
+      const scopedOrgId = actorOrgId || DEMO_ORG_ID;
+      if (systemOrgId !== scopedOrgId) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ message: "forbidden - out of org scope" }),
+        };
+      }
+    }
+
+    if (!isAdminOrSuper(actorRole as any)) {
+      if (!userId)
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ message: "forbidden - user id required" }),
+        };
+
+      if (!actorIsActive) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ message: "forbidden - user is not active" }),
+        };
+      }
+
+      // Demo org members can trigger any demo system. Real-org members
+      // need explicit access.
+      const isDemoOrgViewer = systemOrgId === DEMO_ORG_ID;
+      if (!isDemoOrgViewer && !actorAllowed.includes(systemId)) {
+        return {
+          statusCode: 403,
+          headers,
+          body: JSON.stringify({ message: "forbidden - no access to system" }),
+        };
+      }
+    }
 
     const deploymentMode = resolveDeploymentMode(
       system.url,

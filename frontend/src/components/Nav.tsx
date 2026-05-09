@@ -7,7 +7,7 @@ import logoLight from "../../assets/No_Name_Light.png";
 
 export default function Nav() {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, signOut, isDemo } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   if (!user) {
@@ -27,17 +27,38 @@ export default function Nav() {
         <img src={logoSrc} alt="System Pulse" className="brand-logo" />
         <div>
           <p className="brand-title">SystemPulse</p>
-          <p className="brand-subtitle">Automation and Health Monitoring</p>
+          <p className="brand-subtitle">
+            {user.orgName
+              ? `Organization · ${user.orgName}`
+              : "Automation and Health Monitoring"}
+          </p>
         </div>
       </div>
 
       <div className="session-inline">
+        {isDemo && (
+          <span
+            className="dev-quick-tag"
+            style={{
+              background: "#7d4eff22",
+              color: "#7d4eff",
+              border: "1px solid #7d4eff66",
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 600,
+              marginRight: 4,
+            }}
+          >
+            DEMO
+          </span>
+        )}
         <button className="btn btn-muted" onClick={toggleTheme}>
           {theme === "dark" ? "Light" : "Dark"} Mode
         </button>
         <p className="session-user">{user.full_name}</p>
         <button className="btn btn-logout" onClick={onLogout}>
-          Logout
+          {isDemo ? "Exit demo" : "Logout"}
         </button>
       </div>
     </nav>

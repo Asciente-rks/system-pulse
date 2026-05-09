@@ -1,8 +1,12 @@
 import type { UserRole } from "../types/user.js";
 
+// Role hierarchy for invites and visibility. `user` is the new SaaS
+// member role; `tester` remains as a legacy alias and is treated
+// equivalently for invitation/listing purposes.
 const roleHierarchy: Record<UserRole, UserRole[]> = {
-  superadmin: ["superadmin", "admin", "tester"],
-  admin: ["tester"],
+  superadmin: ["superadmin", "admin", "user", "tester"],
+  admin: ["user", "tester"],
+  user: [],
   tester: [],
 };
 
@@ -31,4 +35,18 @@ export function isSuperAdmin(role?: UserRole): boolean {
 
 export function canCreateAccount(role?: UserRole): boolean {
   return isAdminOrSuper(role);
+}
+
+/**
+ * Org-scoped visibility check. Superadmin sees all orgs. Everyone else
+ * is locked to their own org.
+ */
+export function canSeeOrg(
+  actorRole: UserRole | undefined,
+  actorOrgId: string | undefined,
+  targetOrgId: string | undefined,
+): boolean {
+  if (actorRole === "superadmin") return true;
+  if (!actorOrgId || !targetOrgId) return false;
+  return actorOrgId === targetOrgId;
 }

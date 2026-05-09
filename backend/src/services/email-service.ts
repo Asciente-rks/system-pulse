@@ -14,6 +14,20 @@ interface SendPasswordResetEmailInput {
   eligibilityExpiresAt: string;
 }
 
+interface SendOtpEmailInput {
+  to: string;
+  otp: string;
+  fullName: string;
+  expiresInMinutes: number;
+}
+
+interface SendWelcomeEmailInput {
+  to: string;
+  fullName: string;
+  orgName: string;
+  loginLink: string;
+}
+
 let transporter: nodemailer.Transporter | null = null;
 
 const getTransporter = (): nodemailer.Transporter => {
@@ -74,5 +88,62 @@ export const sendPasswordResetEmail = async (
     subject: "Reset your System Pulse password",
     text: `A password reset was requested for your account.\n\nReset your password here: ${input.resetLink}\n\nEligibility expires at: ${input.eligibilityExpiresAt}.\n\nIf you did not request this, you can ignore this email.`,
     html: `<p>A password reset was requested for your account.</p><p>Reset your password here:<br/><a href="${input.resetLink}">${input.resetLink}</a></p><p>Eligibility expires at: <strong>${input.eligibilityExpiresAt}</strong>.</p><p>If you did not request this, you can ignore this email.</p>`,
+  });
+};
+
+export const sendOtpEmail = async (input: SendOtpEmailInput): Promise<void> => {
+  const user = process.env.EMAIL_USER;
+  if (!user) {
+    throw new Error("EMAIL_USER must be configured");
+  }
+
+  const mailer = getTransporter();
+
+  await mailer.sendMail({
+    from: `System Pulse <${user}>`,
+    to: input.to,
+    subject: `Your System Pulse verification code: ${input.otp}`,
+    text:
+      `Hello ${input.fullName},\n\n` +
+      `Your verification code is: ${input.otp}\n\n` +
+      `This code expires in ${input.expiresInMinutes} minutes.\n\n` +
+      `If you didn't request this code, you can safely ignore this email.`,
+    html:
+      `<p>Hello ${input.fullName},</p>` +
+      `<p>Your verification code is:</p>` +
+      `<p style="font-size:28px;letter-spacing:6px;font-weight:bold;font-family:monospace;">${input.otp}</p>` +
+      `<p>This code expires in <strong>${input.expiresInMinutes} minutes</strong>.</p>` +
+      `<p>If you didn't request this code, you can safely ignore this email.</p>`,
+  });
+};
+
+export const sendWelcomeEmail = async (
+  input: SendWelcomeEmailInput,
+): Promise<void> => {
+  const user = process.env.EMAIL_USER;
+  if (!user) {
+    throw new Error("EMAIL_USER must be configured");
+  }
+
+  const mailer = getTransporter();
+
+  await mailer.sendMail({
+    from: `System Pulse <${user}>`,
+    to: input.to,
+    subject: `Welcome to System Pulse, ${input.fullName}!`,
+    text:
+      `Hello ${input.fullName},\n\n` +
+      `Welcome to System Pulse!\n\n` +
+      `Your free organization "${input.orgName}" is ready. ` +
+      `As an admin you can add unlimited systems and invite users.\n\n` +
+      `Sign in here: ${input.loginLink}\n\n` +
+      `Happy monitoring!`,
+    html:
+      `<p>Hello ${input.fullName},</p>` +
+      `<p>Welcome to <strong>System Pulse</strong>!</p>` +
+      `<p>Your free organization <strong>${input.orgName}</strong> is ready. ` +
+      `As an admin you can add unlimited systems and invite users.</p>` +
+      `<p><a href="${input.loginLink}">Sign in to your dashboard</a></p>` +
+      `<p>Happy monitoring!</p>`,
   });
 };

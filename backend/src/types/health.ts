@@ -12,6 +12,12 @@ export interface HealthCheck {
   lastChecked?: string;
   lastResponseCode?: number;
   responseTimeMs?: number;
+  /**
+   * Tenant ownership for SaaS data isolation. Systems without
+   * `orgId` are treated as belonging to the demo org for
+   * backwards-compat with pre-SaaS data.
+   */
+  orgId?: string;
 }
 
 export interface CreateHealthInput extends Omit<

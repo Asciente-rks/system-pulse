@@ -10,6 +10,7 @@ import Nav from "./components/Nav";
 import { useAuth } from "./hooks/useAuth";
 import AcceptInvite from "./pages/AcceptInvite";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import AdminDashboard from "./pages/AdminDashboard";
 import TesterDashboard from "./pages/TesterDashboard";
 import ForgotPassword from "./pages/ForgotPassword";
@@ -29,7 +30,7 @@ function RequireRoles({
   roles,
   children,
 }: {
-  roles: Array<"superadmin" | "admin" | "tester">;
+  roles: Array<"superadmin" | "admin" | "tester" | "user">;
   children: JSX.Element;
 }) {
   const { user } = useAuth();
@@ -39,7 +40,7 @@ function RequireRoles({
   }
 
   if (!roles.includes(user.role)) {
-    if (user.role === "tester") {
+    if (user.role === "tester" || user.role === "user") {
       return <Navigate to="/tester" replace />;
     }
 
@@ -56,7 +57,7 @@ function DefaultRoute() {
     return <Navigate to="/login" replace />;
   }
 
-  if (user.role === "tester") {
+  if (user.role === "tester" || user.role === "user") {
     return <Navigate to="/tester" replace />;
   }
 
@@ -69,6 +70,7 @@ function AppShell() {
   const showNav =
     isAuthenticated &&
     location.pathname !== "/login" &&
+    location.pathname !== "/register" &&
     location.pathname !== "/accept-invite" &&
     location.pathname !== "/forgot-password" &&
     location.pathname !== "/reset-password";
@@ -87,6 +89,7 @@ function AppShell() {
       <main className="container-wrap page-content">
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
           <Route path="/accept-invite" element={<AcceptInvite />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -106,7 +109,7 @@ function AppShell() {
             path="/tester"
             element={
               <RequireAuth>
-                <RequireRoles roles={["tester"]}>
+                <RequireRoles roles={["tester", "user"]}>
                   <TesterDashboard />
                 </RequireRoles>
               </RequireAuth>

@@ -2,7 +2,7 @@ const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/g, "") ||
   "http://localhost:3000/dev";
 
-export type AuthRole = "superadmin" | "admin" | "tester";
+export type AuthRole = "superadmin" | "admin" | "user" | "tester";
 export type DeploymentMode = "render" | "standard";
 export type DeploymentModeInput = DeploymentMode | "auto";
 
@@ -13,6 +13,14 @@ export interface SessionUser {
   role: AuthRole;
   status_: "Active" | "Pending" | "Suspended";
   allowedSystemIds: string[];
+  /** Tenant the session belongs to. */
+  orgId?: string;
+  /** Display label for the org (returned by login/register/demo). */
+  orgName?: string;
+  /** True when this session is a throwaway demo. */
+  demoMode?: boolean;
+  /** Demo session expiry (epoch seconds). */
+  demoExpiresAt?: number;
 }
 
 export interface SystemSummary {
@@ -25,6 +33,7 @@ export interface SystemSummary {
   lastChecked?: string;
   lastResponseCode?: number;
   responseTimeMs?: number;
+  orgId?: string;
 }
 
 function buildHeaders(includeJsonContentType: boolean) {
@@ -36,9 +45,13 @@ function buildHeaders(includeJsonContentType: boolean) {
 
   const role = localStorage.getItem("role");
   const userId = localStorage.getItem("userId");
+  const orgId = localStorage.getItem("orgId");
+  const demoMode = localStorage.getItem("demoMode");
 
   if (role) h["x-inviter-role"] = role;
   if (userId) h["x-user-id"] = userId;
+  if (orgId) h["x-org-id"] = orgId;
+  if (demoMode === "true") h["x-demo-mode"] = "true";
 
   return h;
 }
@@ -92,7 +105,7 @@ export function getApiBaseUrl() {
 export async function inviteUser(payload: {
   email: string;
   full_name: string;
-  role: "superadmin" | "admin" | "tester";
+  role: "superadmin" | "admin" | "user" | "tester";
 }) {
   return request<Record<string, unknown>>("/users/invite", {
     method: "POST",
@@ -228,4 +241,63 @@ export async function deleteSystem(systemId: string, actorPassword: string) {
       body: JSON.stringify({ actorPassword }),
     },
   );
+}
+
+// ---- SaaS: registration + demo mode ----
+
+export interface RegisterStartPayload {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  full_name: string;
+  org_name: string;
+}
+
+export async function registerStart(payload: RegisterStartPayload) {
+  return request<{
+    message?: string;
+    data?: { email: string; expiresInMinutes: number; devOtp?: string };
+  }>("/auth/register/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function registerVerify(payload: {
+  email: string;
+  otp: string;
+}) {
+  return request<{
+    message?: string;
+    data?: {
+      user: SessionUser;
+      org: { id: string; name: string; createDate: string };
+    };
+  }>("/auth/register/verify", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function registerResend(email: string) {
+  return request<{
+    message?: string;
+    data?: { email: string; expiresInMinutes: number; devOtp?: string };
+  }>("/auth/register/resend", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function startDemo(payload: {
+  role?: "admin" | "user";
+  display_name?: string;
+}) {
+  return request<{
+    message?: string;
+    data?: { user: SessionUser; ttlSeconds: number };
+  }>("/auth/demo", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

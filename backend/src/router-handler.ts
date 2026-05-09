@@ -8,6 +8,10 @@ import { headers as defaultHeaders } from "./utils/error-handler.js";
 import { login } from "./functions/auth/login.js";
 import { forgotPassword } from "./functions/auth/forgot-password.js";
 import { resetPassword } from "./functions/auth/reset-password.js";
+import { registerStart } from "./functions/auth/register-start.js";
+import { registerVerify } from "./functions/auth/register-verify.js";
+import { registerResend } from "./functions/auth/register-resend.js";
+import { demoStart } from "./functions/auth/demo-start.js";
 import { createUserInvitation } from "./functions/user/create-user.js";
 import { acceptUserInvitation } from "./functions/user/accept-invite.js";
 import { assignSystemAccess } from "./functions/user/assign-system-access.js";
@@ -31,9 +35,20 @@ interface Route {
 }
 
 const routes: Route[] = [
+  // Auth
   { method: "POST", path: "/auth/login", handler: login },
   { method: "POST", path: "/auth/forgot-password", handler: forgotPassword },
   { method: "POST", path: "/auth/reset-password", handler: resetPassword },
+
+  // Self-serve registration (multi-tenant SaaS)
+  { method: "POST", path: "/auth/register/start", handler: registerStart },
+  { method: "POST", path: "/auth/register/verify", handler: registerVerify },
+  { method: "POST", path: "/auth/register/resend", handler: registerResend },
+
+  // Demo session
+  { method: "POST", path: "/auth/demo", handler: demoStart },
+
+  // Users (org-scoped)
   { method: "POST", path: "/users/invite", handler: createUserInvitation },
   {
     method: "POST",
@@ -44,6 +59,8 @@ const routes: Route[] = [
   { method: "GET", path: "/users", handler: listUsers },
   { method: "GET", path: "/users/:id", handler: getUser },
   { method: "DELETE", path: "/users/:id", handler: deleteUser },
+
+  // Systems (org-scoped)
   { method: "GET", path: "/systems", handler: listSystems },
   { method: "POST", path: "/systems", handler: createHealthCheck },
   { method: "DELETE", path: "/systems/:id", handler: deleteSystem },
