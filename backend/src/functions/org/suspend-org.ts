@@ -293,7 +293,7 @@ export const reactivateOrg = async (
             reason: "Reactivated by superadmin",
             notes: validated.notes,
             action: "reactivated",
-            loginLink: `${process.env.FRONTEND_URL || ""}/login`,
+            loginLink: `${resolveFrontendBaseUrl(event.headers)}/login`,
           });
         }
       } catch (mailErr) {

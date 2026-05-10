@@ -9,6 +9,7 @@ import {
   type UserPermissions,
 } from "../../types/user.js";
 import { sendStatusChangeEmail } from "../../services/email-service.js";
+import { resolveFrontendBaseUrl } from "../../utils/frontend-url.js";
 import {
   canSeeOrg,
   hasPermission,
@@ -326,7 +327,7 @@ export const updateUserPermissions = async (
             reason: "Reactivated",
             notes,
             action: "reactivated",
-            loginLink: `${process.env.FRONTEND_URL || ""}/login`,
+            loginLink: `${resolveFrontendBaseUrl(event.headers)}/login`,
           });
         }
       } catch (mailErr) {

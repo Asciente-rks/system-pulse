@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { acceptInvite } from "../services/api";
+import { useAuth } from "../hooks/useAuth";
 import PasswordChecklist, {
   isPasswordStrong,
 } from "../components/PasswordChecklist";
@@ -8,6 +9,21 @@ import { fieldErrors, setupPasswordSchema } from "../utils/validation";
 
 export default function AcceptInvite() {
   const navigate = useNavigate();
+  const { signOut } = useAuth();
+
+  // CRITICAL — if the inviter (e.g. the org owner) is signed in on
+  // this same browser when the invitee opens the email link, the
+  // SPA would otherwise silently treat the invitee as the inviter
+  // (auto-redirecting them to the inviter's dashboard after their
+  // password is set). Clear any existing session before rendering
+  // the form so the only path forward is a fresh login.
+  useEffect(() => {
+    signOut();
+    // Also nuke any stray session cache to be safe.
+    try {
+      localStorage.removeItem("systemPulseSession");
+    } catch {}
+  }, [signOut]);
 
   const queryToken = useMemo(() => {
     const params = new URLSearchParams(window.location.search);

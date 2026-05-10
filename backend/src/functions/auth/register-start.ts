@@ -81,20 +81,21 @@ export const registerStart = async (
     );
 
     if (matchingUsers.length > 0) {
-      // Generic response — same shape and content as the success
-      // path so the caller can't distinguish "email already taken"
-      // from "code sent" via response inspection.
+      // Clear, professional message. We deliberately surface the
+      // collision rather than masking it for enumeration safety —
+      // the trade-off here favours legitimate users who'd otherwise
+      // be stuck wondering why no email arrived. The platform owner
+      // accepted this in the product brief.
       return {
-        statusCode: 200,
+        statusCode: 409,
         headers,
         body: JSON.stringify({
-          status: 200,
+          status: 409,
           message:
-            "If this email is available, a verification code has been sent.",
-          data: {
-            email: validated.email,
-            expiresInMinutes: otpTtlMinutes,
-          },
+            "An account is already registered with this email. " +
+            "Sign in if you remember your password, or use Forgot " +
+            "Password to reset it.",
+          data: { email: validated.email, alreadyRegistered: true },
         }),
       };
     }

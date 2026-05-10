@@ -148,7 +148,6 @@ export default function AdminDashboard() {
   // (descending). We auto-reset on filter switch so the labels match
   // expectations; the user can still flip via the toolbar button.
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
-  const [userOrgFilter, setUserOrgFilter] = useState<string>("all");
 
   useEffect(() => {
     setSortDirection(userFilter === "all-by-name" ? "asc" : "desc");
@@ -217,12 +216,7 @@ export default function AdminDashboard() {
   const sortedFilteredUsers = useMemo(() => {
     let list = users;
 
-    // 1. Filter by org (superadmin's "Organization" picker).
-    if (userOrgFilter !== "all") {
-      list = list.filter((u) => u.orgId === userOrgFilter);
-    }
-
-    // 2. Filter by role-bucket — the user's primary "Sort by" pick
+    // Filter by role-bucket — the user's primary "Sort by" pick
     //    behaves as a filter, not a multi-key sort.
     if (userFilter === "owners") {
       list = list.filter((u) => u.role === "owner");
@@ -232,9 +226,9 @@ export default function AdminDashboard() {
       list = list.filter((u) => u.role === "user" || u.role === "tester");
     }
 
-    // 3. Sort. Name-mode sorts by full_name; role-bucket modes sort
-    //    by createDate so the direction toggle does its expected
-    //    "newest first ↔ oldest first" thing.
+    // Sort. Name-mode sorts by full_name; role-bucket modes sort
+    // by createDate so the direction toggle does its expected
+    // "newest first ↔ oldest first" thing.
     const out = [...list];
     if (userFilter === "all-by-name") {
       out.sort((a, b) => a.full_name.localeCompare(b.full_name));
@@ -244,11 +238,11 @@ export default function AdminDashboard() {
       );
     }
 
-    // 4. Direction toggle.
+    // Direction toggle.
     if (sortDirection === "asc") out.reverse();
 
     return out;
-  }, [users, userFilter, sortDirection, userOrgFilter]);
+  }, [users, userFilter, sortDirection]);
   void ROLE_RANK; // role priority no longer used; left in case we revive it
 
   const totalUserPages = Math.max(
@@ -260,22 +254,6 @@ export default function AdminDashboard() {
     const start = (userPage - 1) * USERS_PER_PAGE;
     return sortedFilteredUsers.slice(start, start + USERS_PER_PAGE);
   }, [sortedFilteredUsers, userPage]);
-
-  // Build a list of orgs visible to the actor for the org-filter
-  // dropdown. Superadmin sees every org via Platform tab data;
-  // everyone else can only see their own.
-  const userOrgFilterOptions = useMemo(() => {
-    if (isSuperAdmin && platformOrgs.length > 0) {
-      return [
-        { id: "all", name: "All organizations" },
-        ...platformOrgs.map((o) => ({ id: o.id, name: o.name })),
-      ];
-    }
-    if (user?.orgId && user.orgName) {
-      return [{ id: "all", name: `All in ${user.orgName}` }];
-    }
-    return [{ id: "all", name: "All visible" }];
-  }, [isSuperAdmin, platformOrgs, user?.orgId, user?.orgName]);
 
   const hasPendingChecks = useMemo(
     () =>
@@ -1239,8 +1217,11 @@ export default function AdminDashboard() {
           )}
 
           <div
-            className="form-grid form-grid-2col"
-            style={{ marginBottom: 12 }}
+            className="form-grid"
+            style={{
+              marginBottom: 12,
+              gridTemplateColumns: "minmax(220px, 1fr)",
+            }}
           >
             <div className="form-field">
               <label className="field-label">Sort by</label>
@@ -1259,20 +1240,10 @@ export default function AdminDashboard() {
               />
             </div>
             {isSuperAdmin && (
-              <div className="form-field">
-                <label className="field-label">Organization</label>
-                <AestheticSelect
-                  ariaLabel="Filter by organization"
-                  value={userOrgFilter}
-                  onChange={(nextValue) =>
-                    setUserOrgFilter(String(nextValue))
-                  }
-                  options={userOrgFilterOptions.map((opt) => ({
-                    value: opt.id,
-                    label: opt.name,
-                  }))}
-                />
-              </div>
+              <p className="panel-copy compact-copy" style={{ opacity: 0.75 }}>
+                Tip: drill into a specific organization from the Platform
+                tab to scope user actions to that org.
+              </p>
             )}
           </div>
 

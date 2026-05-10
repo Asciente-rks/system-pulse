@@ -264,6 +264,18 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
         );
         return;
       }
+      // 409 — email already registered. Surface the message verbatim
+      // (the backend already wrote it professionally). The action
+      // buttons in the JSX below pick up `regError` containing
+      // "already registered" to render Sign in / Forgot password
+      // shortcuts.
+      if (response._httpStatus === 409) {
+        setRegError(
+          response.message ||
+            "An account is already registered with this email.",
+        );
+        return;
+      }
       if (response._httpStatus !== 200) {
         setRegError(response.message || "Registration failed");
         return;
@@ -561,6 +573,35 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
 
             {regStatus && <p className="status-note">{regStatus}</p>}
             {regError && <p className="status-error">{regError}</p>}
+            {/* If the backend signalled "already registered" we
+                offer the two next-step shortcuts inline so the user
+                doesn't have to hunt for the right tab. */}
+            {regError && /already registered/i.test(regError) && (
+              <div className="button-row" style={{ gap: 8, marginTop: 4 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    setSigninEmail(regForm.email);
+                    setRegError(null);
+                    setTab("signin");
+                  }}
+                >
+                  Sign in instead
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-muted"
+                  onClick={() => {
+                    setForgotEmail(regForm.email);
+                    setRegError(null);
+                    setTab("forgot");
+                  }}
+                >
+                  Forgot password
+                </button>
+              </div>
+            )}
           </form>
         )}
 
