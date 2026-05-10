@@ -452,7 +452,7 @@ export default function Profile() {
           your password also clears any failed-login lockout on your
           account.
         </p>
-        <form onSubmit={submitPassword} className="form-grid form-grid-2col">
+        <form onSubmit={submitPassword} className="profile-form-stack">
           <div className="form-field">
             <label className="field-label">Current password</label>
             <input
@@ -494,8 +494,7 @@ export default function Profile() {
                 <p className="status-error">Passwords do not match</p>
               )}
           </div>
-          <div className="form-field form-action-field">
-            <label className="field-label">&nbsp;</label>
+          <div className="profile-form-actions">
             <button
               className="btn btn-primary"
               disabled={

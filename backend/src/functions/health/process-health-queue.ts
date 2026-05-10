@@ -124,6 +124,11 @@ export const processHealthCheckQueue: SQSHandler = async (
         (system as { deploymentMode?: string }).deploymentMode,
       );
 
+      // Pass the resolved deployment mode so the probe picks the
+      // right HTTP timeout (Render systems get 15s instead of 5s
+      // to absorb cold-start tail latency).
+      const resolvedMode = renderWakeupEnabled ? "render" : "standard";
+
       const initialResult = await healthService.runHealthCheck(
         system.id,
         system.url,
@@ -132,6 +137,7 @@ export const processHealthCheckQueue: SQSHandler = async (
           triggerSource:
             message.attempt > 1 ? "delayed-recheck" : "manual-trigger",
           persist: !renderWakeupEnabled || message.attempt > 1,
+          deploymentMode: resolvedMode,
         },
       );
 
@@ -189,6 +195,7 @@ export const processHealthCheckQueue: SQSHandler = async (
           {
             attempt: 2,
             triggerSource: "delayed-recheck",
+            deploymentMode: resolvedMode,
           },
         );
 

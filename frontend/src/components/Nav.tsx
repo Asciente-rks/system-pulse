@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useTheme } from "../hooks/useTheme";
 import logoDark from "../../assets/No_Name_Dark.png";
@@ -131,13 +131,20 @@ export default function Nav() {
             </div>
 
             {isDemo && (
-              <Link
-                to="/register"
+              <button
+                type="button"
                 className="user-popover-cta"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  // Clear the demo session BEFORE routing so Login's
+                  // "if authenticated, redirect to dashboard" effect
+                  // doesn't bounce the user straight back to /tester.
+                  setOpen(false);
+                  signOut();
+                  navigate("/register", { replace: true });
+                }}
               >
                 Sign up for a free account →
-              </Link>
+              </button>
             )}
           </div>
         )}

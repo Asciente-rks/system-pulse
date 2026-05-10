@@ -152,9 +152,16 @@ export const createHealthService = (
       attempt?: number;
       triggerSource?: string;
       persist?: boolean;
+      deploymentMode?: string;
     },
   ): Promise<HealthProbeResult> => {
-    const timeoutMs = options?.timeoutMs ?? 5000;
+    // Render free tier cold-starts can return after ~6-15s. Default
+    // 5s timeout produced false-positive DOWNs even when the server
+    // eventually responded. Render systems get a longer window;
+    // standard systems keep the snappy 5s default.
+    const isRender = options?.deploymentMode === "render";
+    const defaultTimeout = isRender ? 15000 : 5000;
+    const timeoutMs = options?.timeoutMs ?? defaultTimeout;
     const attempt = options?.attempt ?? 1;
     const triggerSource = options?.triggerSource ?? "manual";
     const persist = options?.persist ?? true;
@@ -320,6 +327,7 @@ export const createHealthService = (
         const probe = await runHealthCheck(id, input.url, {
           attempt: 0,
           triggerSource: "system-create",
+          deploymentMode,
         });
 
         return {

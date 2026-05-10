@@ -532,17 +532,40 @@ select.field-input {
 .grid-cards {
   margin-top: 0.75rem;
   display: grid;
-  gap: 0.65rem;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.9rem;
+  /* 1 column on mobile, 2 on tablet, 3 on desktop. Explicit
+     breakpoints — much more predictable than auto-fill. */
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 720px) {
+  .grid-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1080px) {
+  .grid-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 .system-card {
   border: 1px solid var(--line);
   border-radius: 0.92rem;
   background: rgba(255, 255, 255, 0.62);
-  padding: 0.75rem;
-  display: grid;
+  padding: 1rem 1.05rem;
+  display: flex;
+  flex-direction: column;
   gap: 0.7rem;
+  /* Cards in the same row have equal heights; the action row is
+     pinned to the bottom so the inner content never overlaps it. */
+  align-self: stretch;
+  min-height: 240px;
+}
+
+.system-card > :first-child {
+  flex: 1;
 }
 
 .system-title {
@@ -596,7 +619,7 @@ select.field-input {
 .system-actions .btn {
   min-width: 0;
   width: 100%;
-  font-size: 0.83rem;
+  font-size: 0.92rem;
   white-space: nowrap;
 }
 
@@ -605,13 +628,14 @@ select.field-input {
 }
 
 .system-action-btn {
-  min-height: 2.05rem;
-  height: 2.05rem;
+  min-height: 2.5rem;
+  height: 2.5rem;
   border-radius: 0.78rem;
-  padding: 0 0.6rem;
-  font-size: 0.84rem;
+  padding: 0 0.7rem;
+  font-size: 0.92rem;
   line-height: 1;
   letter-spacing: 0.01em;
+  font-weight: 600;
 }
 
 .system-actions-3 {
@@ -1676,4 +1700,26 @@ textarea.field-input {
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.01em;
+}
+
+/* ---- Profile page: stacked form layout ----
+   Used on the password-change form where 3 inputs + a submit button
+   don't fit cleanly into the 2-col grid the rest of the page uses. */
+.profile-form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 480px;
+}
+
+.profile-form-actions {
+  margin-top: 4px;
+}
+
+/* On narrow cards, 4-action rows wrap to a 2x2 grid so buttons
+   never get squashed into illegible widths. */
+@media (max-width: 480px) {
+  .system-actions-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
