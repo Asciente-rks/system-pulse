@@ -8,7 +8,7 @@ System Pulse is a serverless health-monitoring SaaS designed for teams that want
 
 ## Live Demo
 
-- **🌐 Live app:** (https://system-pulse-sn3w.vercel.app/login)
+- **🌐 Live app:** https://system-pulse-sn3w.vercel.app/login
 - **🔧 Backend:** AWS Lambda Function URL (`ap-southeast-1`)
 
 > Cold start may take 1-2 seconds on the first request; subsequent requests are warm.
