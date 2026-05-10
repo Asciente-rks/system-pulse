@@ -162,6 +162,13 @@ export interface User {
   failedLoginAttempts?: number;
   /** ISO timestamp the row was locked. `undefined` ⇒ unlocked. */
   lockedAt?: string;
+  /**
+   * True for the special "Demo Admin Template" / "Demo User Template"
+   * records the demo-start endpoint reads permissions from. Templates
+   * are real USER rows in the demo org but cannot log in (no
+   * passwordHash) and cannot be deleted by anyone.
+   */
+  isDemoTemplate?: boolean;
 }
 
 /**

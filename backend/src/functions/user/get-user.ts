@@ -138,6 +138,7 @@ export const getUser = async (
           permissions: resolvePermissions(user as any),
           lockedAt: typeof user.lockedAt === "string" ? user.lockedAt : null,
           failedLoginAttempts: Number(user.failedLoginAttempts || 0),
+          isDemoTemplate: Boolean(user.isDemoTemplate),
         },
       }),
     };

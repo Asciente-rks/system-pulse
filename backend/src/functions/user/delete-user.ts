@@ -112,6 +112,7 @@ export const deleteUser = async (
           demoMode?: boolean;
           email?: string;
           full_name?: string;
+          isDemoTemplate?: boolean;
         }
       | undefined;
 
@@ -120,6 +121,20 @@ export const deleteUser = async (
         statusCode: 404,
         headers,
         body: JSON.stringify({ message: "user not found" }),
+      };
+    }
+
+    // Demo templates are system-critical (they configure what every
+    // future demo session can do). Block deletion outright — even
+    // for superadmin, since the platform would silently break.
+    if (target.isDemoTemplate) {
+      return {
+        statusCode: 403,
+        headers,
+        body: JSON.stringify({
+          message:
+            "Demo templates control demo-mode permissions and cannot be deleted. Edit their permissions instead.",
+        }),
       };
     }
 

@@ -147,6 +147,13 @@ export const createUserService = (
       role: "admin" | "user";
       displayName: string;
       ttlSeconds: number;
+      /**
+       * Optional override of the role's default permissions. The
+       * demo-start endpoint sources this from the demo-template
+       * user records so superadmins can tune what demo sessions
+       * can do without redeploying.
+       */
+      permissions?: UserPermissions;
     }): Promise<User> {
       const userId = `demo-${uuidv4()}`;
       const createDate = new Date().toISOString();
@@ -164,7 +171,9 @@ export const createUserService = (
         orgId: input.orgId,
         demoMode: true,
         demoExpiresAt: expiresAt,
-        permissions: { ...DEFAULT_PERMISSIONS_BY_ROLE[input.role] },
+        permissions:
+          input.permissions ||
+          { ...DEFAULT_PERMISSIONS_BY_ROLE[input.role] },
       };
 
       const record: UserRecord = {

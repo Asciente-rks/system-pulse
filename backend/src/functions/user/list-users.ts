@@ -123,6 +123,7 @@ export const listUsers = async (
           typeof item.suspendedNotes === "string"
             ? item.suspendedNotes
             : null,
+        isDemoTemplate: Boolean(item.isDemoTemplate),
       }));
 
     return {

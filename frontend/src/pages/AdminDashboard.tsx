@@ -263,6 +263,13 @@ export default function AdminDashboard() {
 
   const loadingRef = useRef(false);
 
+  // Synchronous in-flight tracker. React state updates batch, so
+  // back-to-back rapid clicks on the same button can fire two API
+  // calls before `busy` propagates to the disabled prop. A ref
+  // updates immediately, so the second click in the same render
+  // frame becomes a no-op.
+  const inFlightRef = useRef<Set<string>>(new Set());
+
   async function loadUsersAndSystems(silent = false) {
     if (loadingRef.current) return;
     loadingRef.current = true;
@@ -681,7 +688,10 @@ export default function AdminDashboard() {
   // friendly direction). Suspending now goes through a modal so we
   // can collect a reason + notes.
   async function handleReactivateUser(target: SessionUser) {
-    setBusy(`suspend-${target.id}`);
+    const key = `suspend-${target.id}`;
+    if (inFlightRef.current.has(key)) return; // spam-click guard
+    inFlightRef.current.add(key);
+    setBusy(key);
     setErrorMessage(null);
     try {
       const response = await updateUserPermissions({
@@ -697,6 +707,7 @@ export default function AdminDashboard() {
       setStatusMessage(`${target.full_name} reactivated`);
       await loadUsersAndSystems();
     } finally {
+      inFlightRef.current.delete(key);
       setBusy(null);
     }
   }
@@ -760,7 +771,10 @@ export default function AdminDashboard() {
   }
 
   async function handleReactivateOrg(org: OrgSummary) {
-    setBusy(`org-reactivate-${org.id}`);
+    const key = `org-reactivate-${org.id}`;
+    if (inFlightRef.current.has(key)) return; // spam-click guard
+    inFlightRef.current.add(key);
+    setBusy(key);
     setErrorMessage(null);
     try {
       const response = await reactivateOrg({ orgId: org.id });
@@ -771,8 +785,24 @@ export default function AdminDashboard() {
         return;
       }
       setStatusMessage(`Organization "${org.name}" reactivated`);
+      // Sync the open modal with the new state so the UI flips from
+      // "Reactivate" to "Suspend" immediately. Without this the
+      // stale `orgDetailTarget` kept the Reactivate button live —
+      // every click sent another email.
+      setOrgDetailTarget((current) =>
+        current && current.id === org.id
+          ? {
+              ...current,
+              status_: "Active",
+              suspendedReason: null,
+              suspendedNotes: null,
+              suspendedAt: null,
+            }
+          : current,
+      );
       await loadPlatform();
     } finally {
+      inFlightRef.current.delete(key);
       setBusy(null);
     }
   }
@@ -1318,6 +1348,15 @@ export default function AdminDashboard() {
                         <span className={`role-pill role-${entry.role}`}>
                           {entry.role}
                         </span>
+                        {entry.isDemoTemplate && (
+                          <span
+                            className="role-pill role-locked"
+                            style={{ marginLeft: 6 }}
+                            title="Edit this user's permissions to control what fresh demo sessions are allowed to do."
+                          >
+                            DEMO TEMPLATE
+                          </span>
+                        )}
                       </td>
                       {isSuperAdmin && (
                         <td>
@@ -1352,6 +1391,7 @@ export default function AdminDashboard() {
                           {canUpdateUserPerm &&
                             entry.id !== user?.id &&
                             entry.role !== "superadmin" &&
+                            !entry.isDemoTemplate &&
                             (entry.role !== "owner" || isSuperAdmin) && (
                               <button
                                 className={`btn ${
@@ -1689,6 +1729,21 @@ export default function AdminDashboard() {
               </button>
             </footer>
 
+            {editingUser?.isDemoTemplate && (
+              <div className="panel" style={{ marginTop: 10 }}>
+                <p className="panel-title" style={{ marginBottom: 4 }}>
+                  🧪 Demo template
+                </p>
+                <p className="panel-copy compact-copy">
+                  This is a configuration record, not a real account.
+                  Whatever permissions you save here are what every new
+                  demo-mode session of this role will get on the very
+                  next "Try demo mode" click. Toggle them to control
+                  what reviewers can do.
+                </p>
+              </div>
+            )}
+
             <div className="danger-zone">
               <p className="danger-title">Danger zone</p>
               <p className="panel-copy compact-copy">
@@ -1763,7 +1818,16 @@ export default function AdminDashboard() {
               <button
                 className="btn btn-danger"
                 onClick={handleDeleteUser}
-                disabled={!canDeleteUser || busy === "delete-user"}
+                disabled={
+                  !canDeleteUser ||
+                  busy === "delete-user" ||
+                  Boolean(editingUser?.isDemoTemplate)
+                }
+                title={
+                  editingUser?.isDemoTemplate
+                    ? "Demo templates configure demo mode and can't be deleted"
+                    : undefined
+                }
               >
                 {busy === "delete-user" ? "Deleting..." : "Delete user"}
               </button>

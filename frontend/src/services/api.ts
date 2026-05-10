@@ -113,6 +113,8 @@ export interface SessionUser {
   lockedAt?: string | null;
   /** Failed-login counter (server-side authoritative). */
   failedLoginAttempts?: number;
+  /** True for the demo-mode permission templates. Cannot log in. */
+  isDemoTemplate?: boolean;
 }
 
 export interface SystemSummary {

@@ -318,9 +318,12 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
         setRegError(response.message || "Verification failed");
         return;
       }
-      const created = response.data?.user;
+      // Do NOT auto-sign-in. The user must authenticate explicitly
+      // with their newly-set credentials — same security stance as
+      // the invite-accept flow. We do remember the org name for the
+      // success screen and pre-fill the email when they click
+      // through to the sign-in tab.
       const org = response.data?.org;
-      if (created) signIn(created);
       if (org) setRegCreatedOrgName(org.name);
       setRegStage("success");
       setRegStatus(
@@ -683,12 +686,12 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
 
         {tab === "register" && regStage === "success" && (
           <section className="auth-form">
-            <h2 className="panel-title">You're in! 🎉</h2>
+            <h2 className="panel-title">Account created 🎉</h2>
             <p className="panel-copy">
-              Welcome to System Pulse. Your account is verified and your free
-              organization{" "}
+              Your free organization{" "}
               <strong>{regCreatedOrgName || regForm.org_name}</strong> is
-              ready to go.
+              ready. Sign in with the credentials you just set to enter
+              your dashboard.
             </p>
             <ul className="steps-list">
               <li>
@@ -704,9 +707,21 @@ export default function Login({ defaultTab = "signin" }: LoginProps) {
             </ul>
             <button
               className="btn btn-primary"
-              onClick={() => navigate("/admin", { replace: true })}
+              onClick={() => {
+                // Pre-fill the sign-in tab and switch to it. We
+                // intentionally do NOT auto-authenticate the just-
+                // registered user — they must enter their password
+                // explicitly to prove control of the credentials.
+                setSigninEmail(regForm.email.trim().toLowerCase());
+                setSigninPassword("");
+                setRegStage("form");
+                setRegOtp("");
+                setRegForm(INITIAL_REGISTER);
+                setRegCreatedOrgName(null);
+                setTab("signin");
+              }}
             >
-              Go to my dashboard
+              Continue to sign in
             </button>
           </section>
         )}
