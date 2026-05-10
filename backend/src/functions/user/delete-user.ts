@@ -106,7 +106,13 @@ export const deleteUser = async (
     );
 
     const target = targetResponse.Item as
-      | { role?: string; orgId?: string; demoMode?: boolean }
+      | {
+          role?: string;
+          orgId?: string;
+          demoMode?: boolean;
+          email?: string;
+          full_name?: string;
+        }
       | undefined;
 
     if (!target) {
