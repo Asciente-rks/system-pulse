@@ -132,11 +132,27 @@ export default function AdminDashboard() {
   );
   const [userDeleteNotes, setUserDeleteNotes] = useState("");
 
-  // Sort + filter for the Users tab
-  const [userSort, setUserSort] = useState<
-    "role" | "name" | "status" | "created"
-  >("role");
+  // Sort + filter for the Users tab.
+  // `userFilter` selects WHICH users show:
+  //   - all-by-name : every visible user, alphabetical
+  //   - owners      : only role='owner'
+  //   - admins      : only role='admin'
+  //   - users       : only role='user' or 'tester' (legacy alias)
+  // `sortDirection` is the secondary control rendered as a single
+  // ↑/↓ button at the top-right of the user table — ascending means
+  // oldest first when sorting by date, A-Z when sorting by name.
+  type UserFilter = "all-by-name" | "owners" | "admins" | "users";
+  const [userFilter, setUserFilter] = useState<UserFilter>("all-by-name");
+  // For name mode, sensible default is A → Z (ascending). For role
+  // buckets sorted by createDate, sensible default is newest first
+  // (descending). We auto-reset on filter switch so the labels match
+  // expectations; the user can still flip via the toolbar button.
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [userOrgFilter, setUserOrgFilter] = useState<string>("all");
+
+  useEffect(() => {
+    setSortDirection(userFilter === "all-by-name" ? "asc" : "desc");
+  }, [userFilter]);
 
   // Create system form
   const [systemName, setSystemName] = useState("");
@@ -200,29 +216,40 @@ export default function AdminDashboard() {
 
   const sortedFilteredUsers = useMemo(() => {
     let list = users;
+
+    // 1. Filter by org (superadmin's "Organization" picker).
     if (userOrgFilter !== "all") {
       list = list.filter((u) => u.orgId === userOrgFilter);
     }
+
+    // 2. Filter by role-bucket — the user's primary "Sort by" pick
+    //    behaves as a filter, not a multi-key sort.
+    if (userFilter === "owners") {
+      list = list.filter((u) => u.role === "owner");
+    } else if (userFilter === "admins") {
+      list = list.filter((u) => u.role === "admin");
+    } else if (userFilter === "users") {
+      list = list.filter((u) => u.role === "user" || u.role === "tester");
+    }
+
+    // 3. Sort. Name-mode sorts by full_name; role-bucket modes sort
+    //    by createDate so the direction toggle does its expected
+    //    "newest first ↔ oldest first" thing.
     const out = [...list];
-    if (userSort === "role") {
-      out.sort(
-        (a, b) =>
-          (ROLE_RANK[a.role] ?? 99) - (ROLE_RANK[b.role] ?? 99) ||
-          a.full_name.localeCompare(b.full_name),
-      );
-    } else if (userSort === "name") {
+    if (userFilter === "all-by-name") {
       out.sort((a, b) => a.full_name.localeCompare(b.full_name));
-    } else if (userSort === "status") {
-      out.sort(
-        (a, b) =>
-          a.status_.localeCompare(b.status_) ||
-          a.full_name.localeCompare(b.full_name),
+    } else {
+      out.sort((a, b) =>
+        String(b.createDate || "").localeCompare(String(a.createDate || "")),
       );
     }
-    // "created" defaults to natural order from the API which is
-    // already newest-first.
+
+    // 4. Direction toggle.
+    if (sortDirection === "asc") out.reverse();
+
     return out;
-  }, [users, userSort, userOrgFilter]);
+  }, [users, userFilter, sortDirection, userOrgFilter]);
+  void ROLE_RANK; // role priority no longer used; left in case we revive it
 
   const totalUserPages = Math.max(
     1,
@@ -505,6 +532,10 @@ export default function AdminDashboard() {
   async function openUserSettings(nextUser: SessionUser) {
     setBusy("open-user-settings");
     setErrorMessage(null);
+    // Switch — never stack — modals. If the user clicked Settings
+    // from inside the org-detail modal, close that one first so the
+    // user-edit modal owns the foreground.
+    setOrgDetailTarget(null);
 
     try {
       const response = await getUser(nextUser.id);
@@ -1215,15 +1246,15 @@ export default function AdminDashboard() {
               <label className="field-label">Sort by</label>
               <AestheticSelect
                 ariaLabel="Sort users"
-                value={userSort}
+                value={userFilter}
                 onChange={(nextValue) =>
-                  setUserSort(nextValue as typeof userSort)
+                  setUserFilter(nextValue as typeof userFilter)
                 }
                 options={[
-                  { value: "role", label: "Role (Owner → Admin → User)" },
-                  { value: "name", label: "Name (A–Z)" },
-                  { value: "status", label: "Status" },
-                  { value: "created", label: "Newest first" },
+                  { value: "all-by-name", label: "Name (A–Z)" },
+                  { value: "owners", label: "Owner role" },
+                  { value: "admins", label: "Admin role" },
+                  { value: "users", label: "User role" },
                 ]}
               />
             </div>
@@ -1243,6 +1274,54 @@ export default function AdminDashboard() {
                 />
               </div>
             )}
+          </div>
+
+          <div className="table-toolbar">
+            <p className="panel-copy compact-copy">
+              {userFilter === "all-by-name"
+                ? `Showing ${sortedFilteredUsers.length} ${
+                    sortedFilteredUsers.length === 1 ? "user" : "users"
+                  } alphabetically`
+                : `Showing ${sortedFilteredUsers.length} ${
+                    userFilter === "owners"
+                      ? "owner"
+                      : userFilter === "admins"
+                        ? "admin"
+                        : "user"
+                  }${sortedFilteredUsers.length === 1 ? "" : "s"}`}
+            </p>
+            <button
+              type="button"
+              className="btn btn-muted sort-direction-btn"
+              onClick={() =>
+                setSortDirection((dir) =>
+                  dir === "desc" ? "asc" : "desc",
+                )
+              }
+              title={
+                userFilter === "all-by-name"
+                  ? sortDirection === "desc"
+                    ? "Currently Z–A — click for A–Z"
+                    : "Currently A–Z — click for Z–A"
+                  : sortDirection === "desc"
+                    ? "Newest first — click for oldest first"
+                    : "Oldest first — click for newest first"
+              }
+              aria-label="Toggle sort direction"
+            >
+              <span aria-hidden style={{ fontSize: "1.1em" }}>
+                {sortDirection === "desc" ? "↓" : "↑"}
+              </span>
+              <span style={{ marginLeft: 6 }}>
+                {userFilter === "all-by-name"
+                  ? sortDirection === "desc"
+                    ? "Z – A"
+                    : "A – Z"
+                  : sortDirection === "desc"
+                    ? "Newest first"
+                    : "Oldest first"}
+              </span>
+            </button>
           </div>
 
           <div className="table-wrap">

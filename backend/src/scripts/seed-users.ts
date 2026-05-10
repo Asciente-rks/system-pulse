@@ -177,9 +177,14 @@ async function seed() {
     }
   };
 
+  // Default superadmin email is the platform owner's personal
+  // address. The password ALWAYS has to come from env — knowing the
+  // email gets you nothing without it. This means a fresh deploy
+  // doesn't accidentally seed a passwordless superadmin row.
   await seedAccount({
     id: "seed-superadmin",
-    email: process.env.SEED_SUPERADMIN_EMAIL,
+    email:
+      process.env.SEED_SUPERADMIN_EMAIL || "sonioralphkenneth@gmail.com",
     password: process.env.SEED_SUPERADMIN_PASSWORD,
     full_name: process.env.SEED_SUPERADMIN_NAME || "Platform Admin",
     role: "superadmin",

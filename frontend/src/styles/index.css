@@ -1657,3 +1657,23 @@ textarea.field-input {
   resize: vertical;
   font-family: inherit;
 }
+
+/* Toolbar above the user table — left side shows the filter
+   summary, right side hosts the sort-direction toggle. */
+.table-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.sort-direction-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
