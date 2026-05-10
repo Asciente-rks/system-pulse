@@ -1,8 +1,10 @@
 # System Pulse
 
-> A self-hosted uptime and health-check platform — register URLs, dispatch probes on demand or via background workers, and track status with a 30-day rolling history of every probe result.
+> A multi-tenant uptime and health-check **SaaS platform** — register URLs, dispatch probes on demand or via background workers, and track status with a 30-day rolling history of every probe result. Built to run on AWS free-tier forever.
 
-System Pulse is a serverless health-monitoring SaaS designed for teams that want UptimeRobot-style monitoring on their own AWS account. Invite-based onboarding, per-user system access lists, three-tier role model, and a built-in Render wake-up mode for monitoring sleeping free-tier services. Frontend is a Vite SPA on Vercel; backend is two Lambdas + DynamoDB + SQS + SNS, all provisioned idempotently from a single GitHub Actions workflow.
+System Pulse is a serverless uptime-monitoring platform with a real SaaS shape: self-serve registration with email-OTP verification, organization tenancy, role hierarchy, granular per-user permissions, demo mode with editable permission templates, account lockout, suspend / delete flows with audit-grade reason + notes, and email notifications for every status change.
+
+Frontend is a Vite SPA on Vercel; backend is two Lambdas + DynamoDB + SQS + SNS, all provisioned idempotently from a single GitHub Actions workflow. The whole thing is designed to stay on the AWS perpetual-free tier — $0/month forever at portfolio scale.
 
 ---
 
@@ -10,6 +12,7 @@ System Pulse is a serverless health-monitoring SaaS designed for teams that want
 
 - **🌐 Live app:** https://system-pulse-sn3w.vercel.app/login
 - **🔧 Backend:** AWS Lambda Function URL (`ap-southeast-1`)
+- **🧪 Try Demo Mode:** click *Try demo mode* on the login page — spins up an ephemeral admin or user session in the demo org with destructive actions disabled.
 
 > Cold start may take 1-2 seconds on the first request; subsequent requests are warm.
 
@@ -19,81 +22,126 @@ System Pulse is a serverless health-monitoring SaaS designed for teams that want
 
 1. [What It Does](#what-it-does)
 2. [Architecture](#architecture)
-3. [Tech Stack](#tech-stack)
-4. [Database Design](#database-design)
-5. [Repository Layout](#repository-layout)
-6. [API Reference](#api-reference)
-7. [Authentication & Credentials](#authentication--credentials)
-8. [Deployment](#deployment)
-9. [Cost Breakdown](#cost-breakdown)
-10. [Local Development](#local-development)
-11. [Author](#author)
+3. [Role Hierarchy & Permissions](#role-hierarchy--permissions)
+4. [Tech Stack](#tech-stack)
+5. [Database Design](#database-design)
+6. [Repository Layout](#repository-layout)
+7. [API Reference](#api-reference)
+8. [Authentication & Onboarding Flows](#authentication--onboarding-flows)
+9. [Demo Mode](#demo-mode)
+10. [Security](#security)
+11. [Deployment & Environment Variables](#deployment--environment-variables)
+12. [Cost Breakdown](#cost-breakdown)
+13. [Local Development](#local-development)
+14. [Author](#author)
 
 ---
 
 ## What It Does
 
-- **Register systems** by URL, choose a deployment mode (`render` or `standard`), and Pulse runs an immediate probe on creation.
-- **Probe on demand** from the dashboard, or fan out probes through SQS for batched, resilient checking.
+- **Self-serve registration** — `email + password + org name → 6-digit OTP via email → owner account + free org provisioned`. Validation runs through `validator.isStrongPassword` + `validator.isEmail` so what the live `PasswordChecklist` shows is exactly what the API will accept.
+- **Multi-tenant orgs** — every system, user, and invite is scoped to an organization. Owners run their own workspace; the platform owner (`superadmin`) sees everything cross-org via a dedicated Platform tab.
+- **Per-user permission toggles** — `canCreateUser`, `canDeleteUser`, `canUpdateUser`, `canCreateSystem`, `canDeleteSystem`, `canUpdateSystem`, `canTriggerHealthChecks`, `canViewLogs`. Owners flip them per user; admins can grant the safe ones.
+- **Register systems** by URL, choose a deployment mode (`render` or `standard`), and Pulse runs an immediate probe on creation. Render cold-start mode uses a 90-second wake-up recheck and a 15s HTTP timeout instead of 5s.
+- **Probe on demand** from the dashboard, or fan out probes through SQS for batched, resilient checking with automatic re-enqueue (no in-Lambda sleeps).
+- **Real-time dashboard** — systems tab polls every 10s (4s when a probe is in flight). Logs panel auto-refreshes while open. Render cold-start results land in the UI without a manual refresh.
 - **Persist every probe** as a `HEALTH_LOG` row with response code, latency, attempt number, and trigger source — auto-expired after 30 days via DynamoDB TTL.
-- **Email-based onboarding** — superadmins invite teammates by email; recipient activates via a tokenized link.
-- **Per-user access scoping** — assign each tester the specific systems they're allowed to see (`allowedSystemIds`).
-- **Forgot-password flow** with a separate token store (`ResetTokenIndex` GSI).
-- **Render wake-up mode** — built-in delay logic so monitoring a Render free-tier service doesn't always show "DOWN" because of cold-start sleep.
+- **Email-based onboarding** — owners invite teammates by email; recipient activates via a tokenized link, sets a password, and is forced through a fresh login.
+- **Demo mode** — visitors click *Try demo mode* to spawn an ephemeral admin or user session inside the seed-owned demo org. Permissions are sourced from editable **demo template** records, so the platform owner can tune what reviewers can do without redeploying.
+- **Account lockout** — 3 consecutive failed logins lock the account; admins/owners with `canUpdateUser` can unlock after a password-confirm.
+- **Suspend & delete** — superadmins suspend or hard-delete entire orgs (cascading wipe of users + systems + logs); owners suspend / reactivate / delete users in their own org. Both flows require a dropdown reason + free-text notes; the affected owner / user is emailed.
+- **Profile self-service** — every user can rename, change email (with new-email OTP confirmation), and rotate their password from `/profile`. Owners also rename their org from there.
+- **SSRF-safe URL probes** — every monitored URL is validated against a deny-list (loopback, RFC1918, link-local 169.254/16, CGNAT, IPv6 unique-local, etc.) before fetch. Defense applied at create time AND every probe to defeat DNS rebinding.
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────┐
-│ Browser (React + Vite SPA)  │
-│  • Vercel-hosted            │
-│  • react-router 6           │
-│  • Tailwind 4               │
-└───────────┬─────────────────┘
-            │ HTTPS / REST + JWT
-            │
-            ▼
-┌─────────────────────────────┐
-│ AWS Lambda Function URL      │
-│ system-pulse-{stage}-api     │  ← single-Lambda router
-│ (custom router-handler.ts)   │
-└──┬──────────┬──────────┬─────┘
-   │          │          │
-   │          │          └────► SMTP / nodemailer
-   │          │                  (invites + password reset)
-   │          │
-   │          └────► DynamoDB single table
-   │                  • USER, SYSTEM, HEALTH_LOG
-   │                  • +3 GSIs (EntityType / InviteToken /
-   │                    ResetToken)
-   │                  • TTL on expiresAt (30-day log retention)
-   │
-   ▼
-SQS queue ─────► AWS Lambda
-(or direct        system-pulse-{stage}-health-worker
- invoke)          • probes monitored URLs
-                  • persists status + log
-                  • optional SNS publish
-                  ↓
-              ┌───────────────┐
-              │ Monitored URL │  GET /health → fallback GET /
-              │ (any service) │  → UP / DOWN / UNKNOWN
-              └───────────────┘
-                  ↓
-                  │ (3 retries on failure)
-                  ▼
-              SQS Dead-Letter Queue
+```mermaid
+flowchart TB
+    Browser["Browser<br/>React + Vite + Tailwind"]
+    LambdaAPI["AWS Lambda<br/>system-pulse-api<br/>custom HTTP router"]
+    LambdaWorker["AWS Lambda<br/>health-worker<br/>async probes + recheck"]
+    SQS[("SQS Queue<br/>+ Dead-Letter Queue")]
+    SNS["SNS Topic<br/>opt-in alerts"]
+    DDB[("DynamoDB single table<br/>USER · ORG · SYSTEM ·<br/>HEALTH_LOG · OTP records<br/>3 GSIs · TTL")]
+    SMTP["SMTP / nodemailer<br/>OTP · invites · welcome ·<br/>reset · suspend / delete"]
+    Target["Monitored URL<br/>any service"]
+
+    Browser -->|REST + headers| LambdaAPI
+    LambdaAPI --> SMTP
+    LambdaAPI --> DDB
+    LambdaAPI -->|sqs or direct invoke| SQS
+    LambdaAPI -.direct invoke.-> LambdaWorker
+    SQS --> LambdaWorker
+    LambdaWorker -->|GET /health → GET /| Target
+    LambdaWorker --> DDB
+    LambdaWorker -.optional.-> SNS
+    LambdaWorker -.re-enqueue + delay.-> SQS
+
+    classDef edge fill:#0f1422,stroke:#5eead4,color:#e2e8f0
+    classDef store fill:#0a0e1a,stroke:#5eead4,color:#5eead4
+    class Browser,LambdaAPI,LambdaWorker,SMTP,SNS,Target edge
+    class SQS,DDB store
 ```
 
-**Notable architectural choices:**
+### Notable architectural choices
 
-- **Two Lambdas, one shared codebase.** The `api` Lambda handles all incoming HTTP, the `health-worker` Lambda runs probes async — invoked either directly (`HEALTH_TRIGGER_TRANSPORT=lambda-direct`) or via SQS (`=sqs`). Toggling between transports is one env var; no code change.
+- **Two Lambdas, one shared codebase.** The `api` Lambda handles all incoming HTTP; the `health-worker` Lambda runs probes async — invoked either directly (`HEALTH_TRIGGER_TRANSPORT=lambda-direct`) or via SQS (`=sqs`). Toggling between transports is one env var; no code change.
 - **Custom HTTP router** (`router-handler.ts`) — no Express, no `serverless-express`. ~150 lines map `{method, path}` to Lambda handlers with `:param` matching. Saves cold-start time and `node_modules` weight.
-- **Probing strategy:** worker tries `GET <url>/health` first, falls back to `GET <url>` — if either returns 2xx, system is `UP`; otherwise `DOWN`. Status + response time recorded.
+- **Render wake-up via SQS re-enqueue, not in-Lambda sleep.** When a Render system fails the first probe, the worker re-enqueues the recheck with `DelaySeconds=90` and exits cleanly. The original code did `await sleep(90s)` in-Lambda — this dropped Lambda compute from ~95s to ~10s per Render probe. Gated on `ENABLE_QUEUE_WORKER_MAPPING`; falls back to in-Lambda sleep when the queue mapping is off.
+- **Render-aware HTTP timeout** — Render cold starts can return 6-15 seconds after the first hit. The probe uses 15s for `deploymentMode=render`, 5s for `standard`. Eliminated the false-positive DOWNs the previous fixed-5s timeout produced.
+- **Probing strategy** — worker tries `GET <url>/health` first, falls back to `GET <url>` — if either returns 2xx, system is `UP`; otherwise `DOWN`. SSRF-safe URL guard runs at create time and on every probe.
 - **Single-table DynamoDB design** keeps reads cheap; entity discriminators on every row enable type-aware queries via `EntityTypeIndex`.
-- **TTL auto-purges** old health logs after 30 days — no cron job needed.
+- **TTL auto-purges** old health logs (30 days), expired OTP records (10 minutes), and demo session users (1 hour) — no cron job needed.
+
+---
+
+## Role Hierarchy & Permissions
+
+```mermaid
+flowchart LR
+    super["Superadmin<br/>platform owner<br/>cross-org reach"]
+    owner["Owner<br/>org creator<br/>all permissions on"]
+    admin["Admin<br/>permissions toggleable<br/>by owner"]
+    user["User<br/>trigger + view logs<br/>on assigned systems"]
+    template["Demo Templates<br/>editable permission<br/>presets for demo mode"]
+    demo[("Ephemeral<br/>Demo Sessions")]
+
+    super -->|suspend / delete /<br/>cross-org admin| owner
+    owner -->|create / promote /<br/>demote / delete| admin
+    owner -->|create / suspend /<br/>delete + permission grant| user
+    admin -.permission gated.-> user
+    super -.edits.-> template
+    template -.applied to.-> demo
+
+    classDef tier fill:#0f1422,stroke:#5eead4,color:#e2e8f0
+    classDef demoStyle fill:#1f0f22,stroke:#a978ff,color:#e2c8ff
+    class super,owner,admin,user tier
+    class template,demo demoStyle
+```
+
+| Role | Created via | Cross-org | Default permissions |
+|------|-------------|-----------|---------------------|
+| `superadmin` | Seed script (env-gated) | ✅ | Everything, everywhere |
+| `owner` | `/auth/register/verify` | ❌ | Everything in their org |
+| `admin` | Owner invite | ❌ | Invite users, edit users, create + edit systems, trigger, view logs |
+| `user` / `tester` | Owner / admin invite | ❌ | Trigger + view logs on assigned systems |
+
+**Per-user permission keys** (`UserPermissions` interface):
+
+| Key | What it grants | Owner-only to grant? |
+|-----|----------------|----------------------|
+| `canCreateUser` | Send invites | No |
+| `canCreateSystem` | Register new systems | No |
+| `canUpdateSystem` | Edit name / URL / mode | No |
+| `canTriggerHealthChecks` | Run probes | No |
+| `canViewLogs` | Read probe history | No |
+| `canDeleteUser` | Permanently delete users | ⚡ Yes |
+| `canDeleteSystem` | Permanently delete systems | ⚡ Yes |
+| `canUpdateUser` | Edit permissions, suspend, unlock | ⚡ Yes |
+
+Owners always carry every permission regardless of what's stored. Plain admins can flip the safe permissions on users they invite; only owners can grant the ⚡ ones. Demo templates carry the same shape — editing them tunes future demo sessions.
 
 ---
 
@@ -111,7 +159,8 @@ SQS queue ─────► AWS Lambda
 | Pub/Sub | **SNS** topic (opt-in) | Notify on status change |
 | Worker invoke | `@aws-sdk/client-lambda` direct invoke | Faster than SQS for low-volume manual triggers |
 | Email | nodemailer + SMTP | Free with Gmail / any SMTP provider |
-| Validation | Yup | Tiny, ergonomic |
+| Validation | **Yup + validator** | Yup for shape, `validator.isEmail` / `isStrongPassword` for the rules — same rules shared between frontend + backend |
+| Hashing | scrypt (Node `crypto`) | Built-in, no native deps |
 | ID generation | `uuid` v4 | Standard |
 
 ### Frontend
@@ -123,13 +172,83 @@ SQS queue ─────► AWS Lambda
 | Styling | Tailwind CSS 4 | Utility-first, latest engine |
 | Routing | react-router-dom 6 | Nested layouts, route guards |
 | HTTP | `fetch` (native) | No axios needed for this scope |
+| Validation | yup + validator (shared with backend) | Live `<PasswordChecklist>` component reflects exactly what the API enforces |
 | Hosting | **Vercel** | Hobby tier free, global CDN, automatic deploys |
 
 ---
 
 ## Database Design
 
-System Pulse uses a **DynamoDB single-table** design. One table holds users, systems, invites, password-reset tokens, and health logs, distinguished by an `entityType` attribute and PK/SK prefixes. Three GSIs cover the read patterns.
+System Pulse uses a **DynamoDB single-table** design. One table holds organizations, users, systems, invites, password-reset tokens, registration OTPs, email-change OTPs, demo templates, and health logs — all distinguished by an `entityType` attribute and PK/SK prefixes.
+
+```mermaid
+erDiagram
+    ORG ||--|{ USER : "members"
+    ORG ||--o{ SYSTEM : "monitors"
+    USER ||--o{ HEALTH_LOG : "triggers"
+    SYSTEM ||--o{ HEALTH_LOG : "probe results"
+
+    ORG {
+        string id PK
+        string name
+        string ownerId
+        string status_
+        boolean isDemo
+        boolean isInternal
+        string suspendedReason
+        string suspendedNotes
+    }
+    USER {
+        string id PK
+        string email UK
+        string role
+        string orgId FK
+        string status_
+        string passwordHash
+        list allowedSystemIds
+        object permissions
+        boolean isDemoTemplate
+        boolean demoMode
+        number failedLoginAttempts
+        string lockedAt
+        string suspendedReason
+    }
+    SYSTEM {
+        string id PK
+        string name
+        string url
+        string deploymentMode
+        string orgId FK
+        string status
+        string lastChecked
+        number responseTimeMs
+    }
+    HEALTH_LOG {
+        string systemId FK
+        string status
+        string checkedAt
+        number responseCode
+        number responseTimeMs
+        number attempt
+        string triggerSource
+        number expiresAt
+    }
+    REGISTER_OTP {
+        string email PK
+        string passwordHash
+        string fullName
+        string orgName
+        string otpHash
+        number expiresAt
+        number attempts
+    }
+    EMAIL_CHANGE_OTP {
+        string userId PK
+        string newEmail
+        string otpHash
+        number expiresAt
+    }
+```
 
 ### Table: `system-pulse-{stage}-table`
 
@@ -137,114 +256,75 @@ The table is provisioned by the deployment workflow with `BillingMode: PAY_PER_R
 
 | Item type | PK | SK | What it holds |
 |-----------|----|----|---------------|
-| **USER** | `USER` | `USER#<id>` | Account, role, status, allowedSystemIds |
-| **SYSTEM** | `SYSTEM` | `SYS#<uuid>` | Monitored URL, current status, last probe |
-| **HEALTH_LOG** | `SYSTEM#<id>` | `LOG#<iso-time>#<attempt>` | One row per probe attempt |
-| **INVITE token** | `USER` | `USER#<id>` | indexed by `inviteToken` GSI |
-| **RESET token** | `USER` | `USER#<id>` | indexed by `resetToken` GSI |
+| **ORG** | `ORG` | `ORG#<id>` | Organization metadata, owner pointer, suspend status |
+| **USER** | `USER` | `USER#<id>` | Account, role, status, orgId, permissions, allowedSystemIds, lockedAt |
+| **SYSTEM** | `SYSTEM` | `SYS#<uuid>` | Monitored URL, current status, last probe, orgId |
+| **HEALTH_LOG** | `SYSTEM#<id>` | `LOG#<iso-time>#<attempt>` | One row per probe attempt (TTL 30 days) |
+| **REGISTER_OTP** | `REGISTER_OTP` | `OTP#<email>` | Pending registration with hashed OTP (TTL 10 min) |
+| **EMAIL_CHANGE_OTP** | `EMAIL_CHANGE_OTP` | `USER#<id>` | Pending email-change OTP (TTL 10 min) |
 
 ### Global Secondary Indexes
 
 | Index | Hash key | Range key | Purpose |
 |-------|----------|-----------|---------|
-| `EntityTypeIndex` | `entityType` | `status_` | Type-aware queries (list all users, list active systems) |
+| `EntityTypeIndex` | `entityType` | `status_` | Type-aware queries (list all users, list orgs by status) |
 | `InviteTokenIndex` | `inviteToken` | — | Look up invite by opaque token |
 | `ResetTokenIndex` | `resetToken` | — | Look up password-reset by opaque token |
 
-### USER record
-
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `id` | String | UUID |
-| `email` | String | unique-ish (enforced at app layer) |
-| `full_name` | String | display name |
-| `role` | String | `'superadmin' \| 'admin' \| 'tester'` |
-| `status_` | String | `'Active' \| 'Pending' \| 'Suspended'` |
-| `passwordHash` | String | scrypt: `<salt>:<derived>` |
-| `createDate` | String | ISO datetime |
-| `allowedSystemIds` | List<String> | per-user system access list |
-| `inviteToken` | String | indexed, only set for pending invites |
-| `resetToken` | String | indexed, only set for in-flight password resets |
-
-### SYSTEM record
-
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `id` | String | UUID |
-| `name` | String | display name |
-| `url` | String | monitored URL |
-| `deploymentMode` | String | `'render' \| 'standard'` (Render mode adds wake-up grace period) |
-| `status` | String | `'UP' \| 'DOWN' \| 'UNKNOWN'` |
-| `createDate` | String | ISO |
-| `lastChecked` | String | ISO of last probe |
-| `lastResponseCode` | Number | HTTP status from last probe |
-| `responseTimeMs` | Number | latency from last probe |
-
-### HEALTH_LOG record
-
-Sortable by attempt time within a system's partition.
-
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| `systemId` | String | parent system UUID |
-| `status` | String | `'UP' \| 'DOWN' \| 'UNKNOWN'` |
-| `checkedAt` | String | ISO |
-| `responseCode` | Number | HTTP status |
-| `responseTimeMs` | Number | latency |
-| `checkedUrl` | String | which URL was hit (`/health` or `/`) |
-| `attempt` | Number | retry attempt |
-| `triggerSource` | String | `'manual' \| 'system-create' \| 'queue' \| ...` |
-| `errorMessage` | String | on failure |
-| `expiresAt` | Number | unix epoch — DynamoDB TTL prunes at 30 days |
-
 **Notable design choices:**
 
-- **Tracking number / system ID is the partition key** for related logs because every "show me probe history for system X" query is one `Query` against a single partition.
-- **TTL on `expiresAt`** auto-purges health logs after 30 days — zero ops cost, no cron.
-- **Invite and reset tokens** get their own GSIs because they're looked up by random opaque token, not by user.
-- **`PAY_PER_REQUEST` billing** keeps cost proportional to traffic.
+- **One org owns its data**. Every `USER` and `SYSTEM` carries `orgId`. List endpoints filter by the actor's org; superadmin gets cross-org via dedicated `?orgId=` query.
+- **Demo templates are real USER rows** with `isDemoTemplate: true` and no `passwordHash`. They configure demo-mode permissions but cannot log in. Hard-blocked from deletion.
+- **Cascading soft & hard wipes** — org delete is a hard cascade (users + systems + logs + org). Org suspend is a soft state (`status_=Suspended`) that login.ts honors.
+- **TTL on `expiresAt`** auto-purges health logs after 30 days, OTP records after 10 minutes, and demo session users after 1 hour. Zero ops cost, no cron.
+- **Single-table** keeps reads cheap; entity discriminators on every row enable type-aware queries via `EntityTypeIndex`.
 
 ---
 
 ## Repository Layout
 
-This is a **monorepo**: backend Lambdas and frontend SPA in one repository.
-
 ```
 system-pulse/
-├── .github/workflows/deployment.yml   # 600+ line idempotent infra+code deploy
+├── .github/workflows/deployment.yml   # Idempotent infra+code deploy (~600 lines)
 ├── backend/
 │   ├── package.json                   # Node 20, ESM, AWS SDK v3
 │   ├── tsconfig.json
 │   └── src/
 │       ├── handler.ts                 # Re-exports every Lambda function
-│       ├── router-handler.ts          # Single-Lambda router
+│       ├── router-handler.ts          # Single-Lambda router with :param matching
 │       ├── config/                    # config.ts, db.ts (DDB doc client)
 │       ├── functions/
-│       │   ├── auth/                  # login, forgot-password, reset-password
+│       │   ├── auth/                  # login, forgot/reset, register-{start,verify,resend}, demo-start
 │       │   ├── user/                  # invite, accept, list, get, delete,
-│       │   │                          # assign-system-access
-│       │   └── health/                # check-health, list-systems,
-│       │                              # delete-system, trigger-health,
+│       │   │                          # update-permissions, change-role, unlock
+│       │   ├── me/                    # get-me, update-name, update-email-{start,verify}, update-password
+│       │   ├── org/                   # list-orgs, update-org, suspend-org, delete-org
+│       │   └── health/                # check, list, update, delete, trigger,
 │       │                              # process-health-queue, get-system-logs
 │       ├── services/
-│       │   ├── health-service.ts      # Persist + probe + log
-│       │   ├── user-service.ts
-│       │   ├── email-service.ts       # SMTP via nodemailer
+│       │   ├── health-service.ts      # Persist + probe + log (Render-aware timeout)
+│       │   ├── user-service.ts        # createActiveOwner, createDemoUser, createUserInvitation
+│       │   ├── organization-service.ts
+│       │   ├── otp-service.ts         # Registration OTP store
+│       │   ├── email-change-otp-service.ts
+│       │   ├── email-service.ts       # OTP / welcome / invite / reset / status-change
 │       │   ├── notification-service.ts # SNS publish (opt-in)
 │       │   ├── queue-service.ts       # SQS send/receive
 │       │   └── worker-invoke-service.ts # Direct Lambda invoke
-│       ├── types/                     # health, health-events, user
+│       ├── types/                     # user (with UserPermissions), organization, health
 │       ├── utils/
-│       │   ├── actor-auth.ts          # Token verification
-│       │   ├── error-handler.ts       # Shared CORS + error helpers
-│       │   ├── frontend-url.ts        # Render wake-up URL resolution
-│       │   ├── health-workflow.ts     # resolveDeploymentMode()
-│       │   ├── rate-limit.ts
-│       │   ├── rbac.ts                # Role-based access checks
-│       │   └── parse.ts, password.ts
-│       ├── validation/                # yup schemas
-│       └── scripts/seed-users.ts      # Bootstrap superadmin/admin/tester
+│       │   ├── actor-auth.ts          # Header parsing + DB-backed actor verification
+│       │   ├── error-handler.ts       # CORS + error helpers
+│       │   ├── frontend-url.ts        # Resolve link host from env or request headers
+│       │   ├── health-workflow.ts     # resolveDeploymentMode, isRenderUrl
+│       │   ├── parse.ts               # JSON body parser with 256 KB cap
+│       │   ├── password.ts            # scrypt hash + timing-safe verify
+│       │   ├── rate-limit.ts          # Per-actor + per-IP rolling counter
+│       │   ├── rbac.ts                # hasPermission, isOwner, canChangeRole
+│       │   ├── sanitize.ts            # validator.escape for email bodies
+│       │   └── url-safety.ts          # SSRF guard (loopback, RFC1918, link-local, IPv6)
+│       ├── validation/                # yup + validator schemas, shared with frontend
+│       └── scripts/seed-users.ts      # Env-gated bootstrap (no creds in source)
 └── frontend/
     ├── package.json                   # React 18, Vite 5, Tailwind 4
     ├── vite.config.ts
@@ -254,207 +334,255 @@ system-pulse/
     └── src/
         ├── App.tsx                    # Routes + role guards
         ├── main.tsx
-        ├── components/                # Nav, AestheticSelect
-        ├── hooks/                     # useAuth, useTheme
-        ├── pages/                     # Login, AcceptInvite, AdminDashboard,
-        │                              # TesterDashboard, Systems, Invite,
-        │                              # AssignAccess, ForgotPassword, ResetPassword
-        ├── services/api.ts            # Single typed API client
-        ├── styles/index.css           # Tailwind + custom theme
-        └── utils/health-status.ts
+        ├── components/                # Nav, AestheticSelect, PasswordChecklist
+        ├── hooks/                     # useAuth (with .can()), useTheme
+        ├── pages/                     # Login (tabbed), AcceptInvite, AdminDashboard,
+        │                              # TesterDashboard, Profile, ForgotPassword,
+        │                              # ResetPassword, Register, Home, Systems
+        ├── services/                  # api.ts (typed client + endpoints)
+        ├── styles/index.css           # Green-light/green-dark theme
+        └── utils/                     # validation.ts (yup+validator), health-status, security
 ```
 
 ---
 
 ## API Reference
 
+### Auth & registration
+
 | Method | Path | Auth | Purpose |
-|---|---|---|---|
-| `POST` | `/auth/login` | none | Email + password → access token |
-| `POST` | `/auth/forgot-password` | none | Email a password-reset link |
-| `POST` | `/auth/reset-password` | reset token | Consume token + set new password |
-| `POST` | `/users/invite` | superadmin | Email an invite link to a new teammate |
-| `POST` | `/users/invite/accept` | invite token | Set password + activate account |
-| `POST` | `/users/:id/systems` | admin+ | Replace a user's `allowedSystemIds` |
-| `GET` | `/users` | admin+ | List users |
-| `GET` | `/users/:id` | admin+ or self | Fetch a user |
-| `DELETE` | `/users/:id` | superadmin | Remove a user |
-| `GET` | `/systems` | any auth | List systems (filtered by `allowedSystemIds` for testers) |
-| `POST` | `/systems` | admin+ | Register a new system + run initial probe |
-| `DELETE` | `/systems/:id` | admin+ | Delete a system + its logs |
-| `POST` | `/systems/:id/trigger` | any auth | Fire an on-demand probe |
-| `GET` | `/systems/:id/logs` | any auth | Recent probe history (default 20, max 100) |
+|--------|------|------|---------|
+| POST | `/auth/login` | none | Email + password → session payload (with `permissions`) |
+| POST | `/auth/forgot-password` | none | Email a password-reset link |
+| POST | `/auth/reset-password` | reset token | Set new password |
+| POST | `/auth/register/start` | none | Validate + send 6-digit OTP to a new email |
+| POST | `/auth/register/verify` | OTP | Provision an org + active **owner** account |
+| POST | `/auth/register/resend` | none | Resend OTP (cooldown + cap) |
+| POST | `/auth/demo` | none | Spawn ephemeral demo admin / user session |
 
-`OPTIONS` preflights short-circuit at the router with status 204; CORS headers are force-injected on every response.
+### Profile (the signed-in user)
 
----
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/me` | session | Refresh canonical session payload |
+| POST | `/me/name` | session + password | Update display name |
+| POST | `/me/email/start` | session + password | Send OTP to a new email |
+| POST | `/me/email/verify` | session + OTP | Commit the email change |
+| POST | `/me/password` | session + current pwd | Rotate password (clears any lockout) |
 
-## Authentication & Credentials
+### Users
 
-System Pulse is **invite-only** — no public signup. The first user is created by running the seed script after deploying.
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/users` | admin tier | List users (org-scoped, role-filtered) |
+| GET | `/users/:id` | admin tier | Detail for one user |
+| POST | `/users/invite` | `canCreateUser` | Invite a teammate (admin or user role) |
+| POST | `/users/invite/accept` | invite token | Set password + activate |
+| POST | `/users/:id/permissions` | `canUpdateUser` | System access + status + permissions in one call |
+| POST | `/users/:id/role` | owner | Promote / demote (assignable: admin, user, tester) |
+| POST | `/users/:id/unlock` | `canUpdateUser` + pwd | Clear failed-login lockout |
+| DELETE | `/users/:id` | `canDeleteUser` + pwd | Permanent delete + email user (with reason / notes) |
 
-### Seeded accounts
+### Orgs
 
-`npm run seed:dev` creates these three accounts. All share the password `Password123!` (note the trailing `!`).
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/orgs` | superadmin | Cross-org platform view (with member + system counts) |
+| PATCH | `/orgs/:id` | owner | Rename the organization |
+| POST | `/orgs/:id/suspend` | superadmin | Suspend org + email owner (reason + notes) |
+| POST | `/orgs/:id/unsuspend` | superadmin | Reactivate org + email owner |
+| DELETE | `/orgs/:id` | superadmin + pwd | Hard cascade wipe + email owner (reason + notes) |
 
-| Email | Role | Password |
-|---|---|---|
-| `admin@example.local` | admin | `Password123!` |
-| `tester@example.local` | tester | `Password123!` |
+### Systems
 
-> The seeded `superadmin@example.local` account exists in the database for owner-only operations. Its credentials are intentionally **not** published in the README or in the Dev Tools quick-login panel — only the project owner has them.
-
-### Inviting more users
-
-1. Sign in as superadmin (or admin).
-2. **Users → Invite** → enter email, role, and (for testers) `allowedSystemIds`.
-3. Recipient receives an email with a tokenized invite link (`/accept-invite?token=...`).
-4. They set their password — account becomes `Active`.
-
-### Forgot password
-
-1. From the login page → **Forgot password** → enter email.
-2. Receive a reset link with `?token=...`.
-3. Set new password (token expires in `PASSWORD_RESET_ELIGIBILITY_MINUTES`, default 30).
-
-### Dev Tools quick-login
-
-The login page ships with a floating **⚙ Dev Tools** button in the bottom-right corner. Click it to one-shot sign in as **Admin** or **Tester** using the seeded credentials — handy for portfolio reviewers who don't want to type anything. (The superadmin account is intentionally left out so only the owner can sign in as superadmin.) The button still goes through the rate-limited `/auth/login` endpoint; it just skips the typing.
-
----
-
-## Hardening
-
-Because the live demo is reachable by anyone on the public internet, the API and frontend ship a few defenses:
-
-- **Per-IP login rate limiting** — `backend/src/utils/rate-limit.ts` keeps a DynamoDB-backed bucket per `(IP, actor, time-window)` tuple. `/auth/login` is capped at 10 attempts per 60-second window. Hitting the limit returns `429` with a generic "Too many requests" message. State is persistent across Lambda containers because it lives in DynamoDB (with a TTL that auto-evicts old buckets).
-- **Hardened security headers on every response** (set in `backend/src/utils/error-handler.ts`): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Strict-Transport-Security`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Cross-Origin-Resource-Policy: cross-origin`, plus a generic `Server: SystemPulse` header to mask the runtime fingerprint.
-- **Generic 500s** — the global error handler no longer leaks `error.message` or stack traces; clients always see `{ status: 500, message: "Internal server error" }`.
-- **Frontend bundle hardening** — `frontend/src/utils/security.ts` runs at boot in production builds:
-  - Replaces every `console.*` method with a no-op and clears the console every 1.5s, so opening DevTools shows nothing useful.
-  - Disables the React DevTools global hook so the React component tree isn't browsable.
-  - **Does NOT block F12, right-click, or `Ctrl+Shift+I`** — the dev tools panel itself stays open-able. The defenses are about making what's inside opaque, not about pretending the user can't open it.
-- **Vite production build** — `vite.config.ts` drops every `console.*` call and `debugger` statement from the bundle, disables source maps, and rewrites entry / chunk / asset filenames as content hashes. Combined with esbuild's name mangling, the deployed JS reads as a wall of single-letter identifiers in DevTools.
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/systems` | session | List org systems (or `?orgId=...` for superadmin drill-down) |
+| POST | `/systems` | `canCreateSystem` | Register a system + initial probe |
+| PATCH | `/systems/:id` | `canUpdateSystem` | Edit name / URL / deployment mode |
+| DELETE | `/systems/:id` | `canDeleteSystem` + pwd | Permanent delete + cascade logs |
+| POST | `/systems/:id/trigger` | `canTriggerHealthChecks` | On-demand probe (queued) |
+| GET | `/systems/:id/logs` | `canViewLogs` | Recent probe history |
 
 ---
 
-## Deployment
+## Authentication & Onboarding Flows
 
-### Backend → AWS Lambda (single-command CI/CD)
+### Self-serve registration (multi-tenant entry point)
 
-`.github/workflows/deployment.yml` runs on every push to `main` that touches `backend/` or the workflow itself. It is **fully idempotent** — re-running on a fresh AWS account or an existing one converges to the same end state.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant SPA as React SPA
+    participant API as Lambda /auth/register/*
+    participant DDB as DynamoDB
+    participant SMTP as Email
 
-What it does, in order:
+    User->>SPA: Submit email + password + org name
+    SPA->>API: POST /auth/register/start
+    API->>DDB: PutCommand REGISTER_OTP (TTL 10 min)
+    API->>SMTP: 6-digit OTP email
+    SMTP-->>User: OTP code
+    User->>SPA: Enter OTP
+    SPA->>API: POST /auth/register/verify
+    API->>DDB: Create ORG + active owner USER
+    API->>SMTP: Welcome email
+    API-->>SPA: 201 + org + user payload
+    SPA-->>User: "Account created — sign in to continue"
+    Note right of SPA: NO auto-login. User must<br/>authenticate with their new password.
+```
 
-1. Authenticates to AWS via either access keys (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`) or OIDC role assumption (`AWS_ROLE_TO_ASSUME`) — whichever is present.
-2. Builds TypeScript backend, prunes dev dependencies, zips `dist + node_modules + package.json` into `backend.zip`.
-3. **Provisions or reconciles AWS resources:**
-   - DynamoDB table with three GSIs and TTL on `expiresAt`
-   - SQS queue with redrive policy → DLQ (`maxReceiveCount: 3`)
-   - SNS topic
-   - IAM role with inline policy for DDB (incl. GSIs), SQS, SNS, and Lambda invoke
-4. **Deploys two Lambda functions:**
-   - `system-pulse-{stage}-api` — router-handler, called from a Function URL
-   - `system-pulse-{stage}-health-worker` — async health probes
-5. (Optional) Adds an SQS-to-Worker event source mapping when `ENABLE_QUEUE_WORKER_MAPPING=true`.
-6. Exposes the API via Lambda Function URL with `AuthType: NONE` (CORS handled in app).
-7. (Optional) Encrypts Lambda environment variables with KMS when `LAMBDA_KMS_KEY_ARN` is set.
+### Account lockout & unlock
 
-Stage and region are configurable via `workflow_dispatch` inputs (default `dev` and `ap-southeast-1`).
+```mermaid
+stateDiagram-v2
+    [*] --> Active
+    Active --> Active: successful login\n(reset failedLoginAttempts)
+    Active --> FailedOnce: wrong password
+    FailedOnce --> FailedTwice: wrong password
+    FailedTwice --> Locked: 3rd wrong password\nset lockedAt
+    Locked --> Locked: any login → 423
+    Locked --> Active: admin POST /users/:id/unlock\n(actor password confirm)
+```
 
-### Frontend → Vercel
+### Forgot password & invite acceptance
 
-The frontend builds with `vite build` and is hosted on Vercel. Routing fallbacks come from `frontend/vercel.json`. Set `VITE_API_BASE_URL` to your Lambda Function URL.
+Both flows email a tokenized link. The `token` is consumed as a query string and **never shown to the user**. After password is set, the SPA force-clears any existing session and routes to `/login` so the user authenticates fresh.
+
+---
+
+## Demo Mode
+
+```mermaid
+flowchart LR
+    Click["Click 'Try demo mode'<br/>pick admin or user"]
+    DS["POST /auth/demo<br/>{ role }"]
+    Tpl["Look up demo-template-{role}<br/>(auto-create on first call)"]
+    Demo[("Ephemeral USER row<br/>orgId=demo · demoMode=true<br/>TTL 1h · expiresAt set")]
+    SPA["SPA signs in with<br/>demoMode=true"]
+    Edit["Superadmin edits<br/>demo-template-admin or<br/>demo-template-user"]
+
+    Click --> DS
+    DS --> Tpl
+    Tpl --> Demo
+    Demo --> SPA
+    Edit -.controls.-> Tpl
+```
+
+- **Templates**: `demo-template-admin` and `demo-template-user` are real USER records in the demo org with `isDemoTemplate: true` and no password. They can't log in, can't be deleted (server-enforced), and their `permissions` field is the live source of truth for fresh demo sessions.
+- **First-call auto-provision**: the first `/auth/demo` request creates the missing template with the role's defaults. Idempotent on subsequent calls.
+- **Edit-and-go**: the superadmin opens *Platform → Demo org → Settings on the template* → tweak permissions → Save. The very next *Try demo mode* click reads the new permissions. No redeploy.
+- **Demo guards**: `rejectIfDemo()` blocks every destructive endpoint. Demo session creation is rate-limited; sessions auto-clean via DDB TTL.
+
+---
+
+## Security
+
+| Layer | Defense |
+|-------|---------|
+| Email enumeration on register | Surfaced clearly per product brief — 409 `"already registered"` with inline *Sign in* / *Forgot password* CTAs |
+| Password storage | scrypt (`<salt>:<derived>`), timing-safe compare on verify |
+| Password rules | 8–128 chars, mixed case + number + symbol via `validator.isStrongPassword`; rules shared FE + BE |
+| Failed-login lockout | `MAX_FAILED_LOGIN_ATTEMPTS = 3`; HTTP 423 on locked accounts |
+| OTP brute-force | 6 attempts max, hashed at rest, 30s resend cooldown, 5 resends max |
+| SSRF on monitored URLs | `validator.isURL` (http/https only) + IP-range deny-list (loopback, RFC1918, link-local, CGNAT, IPv6 unique-local). Enforced at create time AND every probe (defeats DNS rebinding) |
+| Request body parser | 256 KB cap → HTTP 413 |
+| Rate limiting | Per-actor + per-IP rolling counters on every mutating endpoint and now every read endpoint |
+| Email body XSS | `validator.escape` every user-supplied string before HTML interpolation |
+| CSRF | N/A — header-based auth, no cookies |
+| CORS | Allow-list includes the headers the SPA actually sends (`x-org-id`, `x-demo-mode`, etc.) |
+| Click-spam on dangerous actions | `useRef<Set<string>>` keyed by action id — synchronous in-flight guard so React batching can't fire two emails on a double click |
+| Secret hygiene | Seed credentials env-gated; no email or password in source. Default seed email is the platform owner's personal address; the password is required from env |
+
+---
+
+## Deployment & Environment Variables
+
+The deploy workflow (`.github/workflows/deployment.yml`) is **idempotent** — re-running on a fresh AWS account stands up the entire system from scratch in ~3 minutes. It provisions the DDB table + GSIs, the SQS queue + DLQ + redrive policy, the SNS topic, the IAM role + inline policy, both Lambdas + their Function URLs, and the SQS-event-source mapping (gated on `ENABLE_QUEUE_WORKER_MAPPING`).
+
+### Required env / secrets (CI)
+
+| Variable | Purpose |
+|----------|---------|
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | AWS credentials (deploy + runtime via Lambda role) |
+| `EMAIL_USER` / `EMAIL_PASS` | Gmail (or any SMTP) creds for nodemailer |
+
+### Optional env (defaults shown)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `STAGE` | `dev` | Deployment stage / table suffix |
+| `AWS_REGION` | `ap-southeast-1` | |
+| `FRONTEND_URL` | (empty) | Used in email links; falls back to request `Origin` / `Referer` if unset |
+| `RENDER_WAKEUP_DELAY_SECONDS` | `90` | Render cold-start recheck delay |
+| `INVITE_ELIGIBILITY_HOURS` | `24` | Invite-token lifetime |
+| `PASSWORD_RESET_ELIGIBILITY_MINUTES` | `30` | Reset-token lifetime |
+| `REGISTER_OTP_TTL_MINUTES` | `10` | Registration / email-change OTP lifetime |
+| `DEMO_SESSION_TTL_SECONDS` | `3600` | Demo user TTL (DDB-cleaned) |
+| `HEALTH_TRIGGER_TRANSPORT` | `lambda-direct` | `sqs` or `lambda-direct` |
+| `ENABLE_QUEUE_WORKER_MAPPING` | `false` | Set `true` to use the SQS path + cheap re-enqueue |
+| `HEALTH_RECHECK_VIA_SQS` | `true` | Render recheck strategy: re-enqueue with delay (vs in-Lambda sleep) |
+| `ENABLE_HEALTH_LOGS` | `true` | Persist HEALTH_LOG rows |
+| `ENABLE_SNS_NOTIFICATIONS` | `false` | Publish status changes to SNS |
+| `SHOW_INVITE_LINK` | `false` | Echo invite link in API response (dev only) |
+| `SHOW_REGISTER_OTP` | `false` | Echo OTP in API response (dev only) |
+
+### Seed-only env (run `npm run seed -- <table>`)
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `SEED_SUPERADMIN_EMAIL` | `sonioralphkenneth@gmail.com` | Platform owner's email |
+| `SEED_SUPERADMIN_PASSWORD` | — | **Required** to seed; password never in source |
+| `SEED_SUPERADMIN_NAME` | `Platform Admin` | |
+| `SEED_DEMO_ADMIN_EMAIL` / `SEED_DEMO_ADMIN_PASSWORD` | — | Optional seeded demo admin login |
+| `SEED_DEMO_USER_EMAIL` / `SEED_DEMO_USER_PASSWORD` | — | Optional seeded demo user login |
+
+If no seed env vars are set, the script still creates the demo org + the platform org but no user accounts. Idempotent — safe to re-run.
 
 ---
 
 ## Cost Breakdown
 
-> **Designed for $0/month forever.** Every layer of System Pulse runs on a free tier with no expiry.
+Designed for **$0/month forever** — every line of the stack runs on a free tier with no expiry.
 
 | Service | Free tier | We use | Headroom |
 |---------|-----------|--------|----------|
-| **AWS Lambda** | 1M invocations/mo + 400K GB-s | ~3K invocations/mo | **99.7%** |
-| **DynamoDB (PAY_PER_REQUEST)** | 25 GB storage + 25 R/W units (perpetual) | <50 MB | **99%+** |
-| **SQS** | 1M requests/mo | <500 req/mo | **99.95%** |
-| **SNS** | 1M publishes/mo | <100/mo | **99.99%** |
-| **SQS DLQ** | counts toward SQS 1M | <10 messages/mo | within limits |
-| **CloudWatch Logs** | 5 GB ingestion/mo | <50 MB | **99%** |
-| **Vercel Hobby** | 100 GB bandwidth, unlimited deploys | <1 GB/mo | **99%** |
-| **GitHub Actions** (public repo) | unlimited minutes | ~3 min/mo | unlimited |
-| **SMTP (Gmail / Resend free)** | 500/day or 100/day | <10/day | **97%+** |
+| AWS Lambda | 1M invocations/mo + 400K GB-s | ~3K invocations/mo | 99.7% |
+| DynamoDB (PAY_PER_REQUEST) | 25 GB storage + 25 R/W units (perpetual) | <50 MB | 99%+ |
+| SQS | 1M requests/mo | <500 req/mo | 99.95% |
+| SNS | 1M publishes/mo | <100/mo | 99.99% |
+| CloudWatch Logs | 5 GB ingestion/mo | <50 MB | 99% |
+| Vercel Hobby | 100 GB bandwidth, unlimited deploys | <1 GB/mo | 99% |
+| SMTP (Gmail) | 500/day | <10/day | 97%+ |
 
-**Total: $0/month**, with massive headroom on every line.
+**Monthly total: $0/month**
 
-**Why each free tier was chosen:**
-
-- **DynamoDB over RDS** — RDS free tier expires after 12 months; DynamoDB's free tier is **perpetual** and scales to single-digit-ms latency.
-- **SQS + DLQ over a self-hosted queue** — built-in retry/DLQ semantics mean a flaky monitored service can't crash the worker fleet.
-- **Two Lambdas, no API Gateway** — Function URLs are free (API Gateway has its own per-million pricing). One less moving part.
-- **Vercel over self-hosting** — global CDN, automatic deploys, free SSL, custom domains. Not worth running our own static host.
-- **Idempotent CI/CD** — re-running the deploy workflow on a fresh AWS account stands up the entire system from scratch in ~3 minutes.
+The Render-recheck SQS optimization (re-enqueue instead of in-Lambda sleep) was specifically motivated by this constraint — it dropped Lambda compute from ~95s to ~10s per Render probe, pushing the platform deeper into the free-tier headroom.
 
 ---
 
 ## Local Development
 
-### Backend
-
 ```bash
-git clone https://github.com/Asciente-rks/system-pulse.git
-cd system-pulse/backend
+# Backend
+cd backend
 npm install
-npm run build               # tsc → dist/
-npm run typecheck
-npm run seed -- <table-name> # Bootstrap a superadmin in your DynamoDB table
-```
+npm run typecheck     # tsc --noEmit
+npm run build         # tsc → dist/
+npm run seed -- <table-name>   # bootstrap demo org + (optional) superadmin
 
-There's no local HTTP server — everything runs in Lambda. To test locally, point a tool like `serverless-offline` or AWS SAM at `dist/handler.js`, or invoke the compiled handlers directly via `node` for unit tests.
-
-### Frontend
-
-```bash
-cd ../frontend
+# Frontend
+cd frontend
 npm install
-npm run dev                 # Vite dev server with HMR
-npm run build               # Production bundle in dist/
-npm run preview             # Serve dist/ locally
+npm run dev           # Vite, hot reload at :5173
 ```
 
-### Environment Variables
-
-**Backend** (set on Lambda via CI workflow + GitHub `vars`/`secrets`):
-
-```env
-TABLE_NAME=system-pulse-dev-table
-SYSTEM_PULSE_TABLE=system-pulse-dev-table
-USERS_TABLE=system-pulse-dev-table
-
-HEALTH_CHECK_QUEUE_URL=https://sqs.ap-southeast-1.amazonaws.com/.../health-check-queue
-HEALTH_STATUS_TOPIC_ARN=arn:aws:sns:ap-southeast-1:...:health-status
-HEALTH_WORKER_FUNCTION_NAME=system-pulse-dev-health-worker
-HEALTH_TRIGGER_TRANSPORT=lambda-direct          # or "sqs"
-ENABLE_HEALTH_LOGS=true
-ENABLE_SNS_NOTIFICATIONS=false
-
-EMAIL_USER=...
-EMAIL_PASS=...
-FRONTEND_URL=https://system-pulse-brown.vercel.app
-
-INVITE_ELIGIBILITY_HOURS=24
-PASSWORD_RESET_ELIGIBILITY_MINUTES=30
-SHOW_INVITE_LINK=false
-RENDER_WAKEUP_DELAY_SECONDS=90
-```
-
-**Frontend** (`frontend/.env`):
-
-```env
-VITE_API_BASE_URL=https://<your-lambda-function-url>
-```
+The SPA expects `VITE_API_URL` to point at the Lambda Function URL (or a local emulator). For local dev with the seeded superadmin, set `SHOW_REGISTER_OTP=true` to get the OTP in the API response (instead of waiting for email).
 
 ---
 
 ## Author
 
-Built by **Ralph Kenneth F. Sonio** ([@Asciente-rks](https://github.com/Asciente-rks)). Live at **[system-pulse-brown.vercel.app](https://system-pulse-brown.vercel.app)**.
+**Ralph Kenneth Sonio** — Cloud-Native Backend & QA Engineer
+[Portfolio](https://asciente-portfolio.vercel.app) · [GitHub](https://github.com/Asciente-rks)
