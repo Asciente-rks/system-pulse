@@ -28,3 +28,5 @@ export { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
 export { updateMyPassword } from "./functions/me/update-password.js";
 export { updateOrg } from "./functions/org/update-org.js";
 export { listOrgs } from "./functions/org/list-orgs.js";
+export { suspendOrg, reactivateOrg } from "./functions/org/suspend-org.js";
+export { deleteOrg } from "./functions/org/delete-org.js";

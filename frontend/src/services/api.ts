@@ -268,11 +268,15 @@ export async function updateUserPermissions(payload: {
   systemIds?: string[];
   status_?: "Active" | "Pending" | "Suspended";
   permissions?: Partial<UserPermissions>;
+  reason?: string;
+  notes?: string;
 }) {
   const body: Record<string, unknown> = {};
   if (payload.systemIds !== undefined) body.systemIds = payload.systemIds;
   if (payload.status_ !== undefined) body.status_ = payload.status_;
   if (payload.permissions !== undefined) body.permissions = payload.permissions;
+  if (payload.reason !== undefined) body.reason = payload.reason;
+  if (payload.notes !== undefined) body.notes = payload.notes;
   return request<Record<string, unknown>>(
     `/users/${encodeURIComponent(payload.userId)}/permissions`,
     {
@@ -370,12 +374,20 @@ export async function getUser(userId: string) {
   );
 }
 
-export async function deleteUser(userId: string, actorPassword: string) {
+export async function deleteUser(
+  userId: string,
+  actorPassword: string,
+  options?: { reason?: string; notes?: string },
+) {
   return request<{ message?: string; data?: { userId: string } }>(
     `/users/${encodeURIComponent(userId)}`,
     {
       method: "DELETE",
-      body: JSON.stringify({ actorPassword }),
+      body: JSON.stringify({
+        actorPassword,
+        reason: options?.reason,
+        notes: options?.notes,
+      }),
     },
   );
 }
@@ -527,7 +539,47 @@ export interface OrgSummary {
   createDate?: string;
   memberCount: number;
   systemCount: number;
+  status_?: "Active" | "Suspended";
+  suspendedReason?: string | null;
+  suspendedNotes?: string | null;
+  suspendedAt?: string | null;
 }
+
+// ---- Reason dropdown options shared between FE + BE ----
+
+export const ORG_SUSPEND_REASONS = [
+  "Policy violation",
+  "Service abuse",
+  "Payment overdue",
+  "Security concern",
+  "Inactive — preserve data",
+  "Other",
+] as const;
+
+export const ORG_DELETE_REASONS = [
+  "Owner requested deletion",
+  "Policy violation - permanent",
+  "Account migration",
+  "Inactive cleanup",
+  "Other",
+] as const;
+
+export const USER_SUSPEND_REASONS = [
+  "Policy violation",
+  "Inactive",
+  "Security concern",
+  "Temporary review",
+  "Role change pending",
+  "Other",
+] as const;
+
+export const USER_DELETE_REASONS = [
+  "User requested deletion",
+  "No longer with org",
+  "Policy violation - permanent",
+  "Duplicate account",
+  "Other",
+] as const;
 
 export async function listOrgs() {
   return request<{
@@ -535,6 +587,55 @@ export async function listOrgs() {
     message?: string;
   }>("/orgs", {
     method: "GET",
+  });
+}
+
+export async function suspendOrg(payload: {
+  orgId: string;
+  reason: string;
+  notes?: string;
+}) {
+  return request<{ message?: string }>(
+    `/orgs/${encodeURIComponent(payload.orgId)}/suspend`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        reason: payload.reason,
+        notes: payload.notes,
+      }),
+    },
+  );
+}
+
+export async function reactivateOrg(payload: {
+  orgId: string;
+  notes?: string;
+}) {
+  return request<{ message?: string }>(
+    `/orgs/${encodeURIComponent(payload.orgId)}/unsuspend`,
+    {
+      method: "POST",
+      body: JSON.stringify({ notes: payload.notes }),
+    },
+  );
+}
+
+export async function deleteOrg(payload: {
+  orgId: string;
+  actorPassword: string;
+  reason: string;
+  notes?: string;
+}) {
+  return request<{
+    message?: string;
+    data?: { id: string; usersDeleted: number; systemsDeleted: number };
+  }>(`/orgs/${encodeURIComponent(payload.orgId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({
+      actorPassword: payload.actorPassword,
+      reason: payload.reason,
+      notes: payload.notes,
+    }),
   });
 }
 

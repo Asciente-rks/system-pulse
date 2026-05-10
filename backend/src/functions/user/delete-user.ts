@@ -16,6 +16,7 @@ import {
 } from "../../utils/actor-auth.js";
 import { enforceRateLimit } from "../../utils/rate-limit.js";
 import { DEMO_ORG_ID } from "../../types/organization.js";
+import { sendStatusChangeEmail } from "../../services/email-service.js";
 
 const effectiveOrgId = (orgId?: unknown): string =>
   typeof orgId === "string" && orgId.length > 0 ? orgId : DEMO_ORG_ID;
@@ -47,6 +48,13 @@ export const deleteUser = async (
     const targetUserId =
       event.pathParameters?.id || (body.userId as string | undefined);
     const actorPassword = String(body.actorPassword || "");
+    // Optional moderator metadata. The frontend's delete dialog now
+    // requires a reason from a fixed dropdown; we accept it here so
+    // the email + audit trail can include it.
+    const deleteReason =
+      typeof body.reason === "string" ? body.reason.trim() : undefined;
+    const deleteNotes =
+      typeof body.notes === "string" ? body.notes.trim() : undefined;
 
     if (!targetUserId) {
       return {
@@ -151,6 +159,37 @@ export const deleteUser = async (
     }
     // touch isAdminTier so unused-import warnings don't fail the build
     void isAdminTier;
+
+    // Email the user BEFORE we wipe their row (best-effort). Targets
+    // with no email (e.g. demo accounts) silently skip.
+    if (target.email) {
+      try {
+        let orgName: string | undefined;
+        if (target.orgId) {
+          try {
+            const orgResp: any = await docClient.send(
+              new (await import("@aws-sdk/lib-dynamodb")).GetCommand({
+                TableName: usersTable,
+                Key: { PK: "ORG", SK: `ORG#${target.orgId}` },
+              }),
+            );
+            orgName = (orgResp.Item as { name?: string } | undefined)?.name;
+          } catch {}
+        }
+        await sendStatusChangeEmail({
+          to: target.email,
+          recipientName: target.full_name || "there",
+          actorName: (actor as any).full_name,
+          orgName,
+          subjectKind: "account",
+          reason: deleteReason || "Account removed",
+          notes: deleteNotes,
+          action: "permanently deleted",
+        });
+      } catch (mailErr) {
+        console.warn("delete-user email send failed:", mailErr);
+      }
+    }
 
     await docClient.send(
       new DeleteCommand({

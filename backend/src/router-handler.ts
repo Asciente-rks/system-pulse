@@ -34,6 +34,8 @@ import { updateMyEmailVerify } from "./functions/me/update-email-verify.js";
 import { updateMyPassword } from "./functions/me/update-password.js";
 import { updateOrg } from "./functions/org/update-org.js";
 import { listOrgs } from "./functions/org/list-orgs.js";
+import { suspendOrg, reactivateOrg } from "./functions/org/suspend-org.js";
+import { deleteOrg } from "./functions/org/delete-org.js";
 
 type LegacyHandler = (
   event: APIGatewayProxyEvent,
@@ -77,6 +79,9 @@ const routes: Route[] = [
   // Org-level admin
   { method: "GET", path: "/orgs", handler: listOrgs },
   { method: "PATCH", path: "/orgs/:id", handler: updateOrg },
+  { method: "POST", path: "/orgs/:id/suspend", handler: suspendOrg },
+  { method: "POST", path: "/orgs/:id/unsuspend", handler: reactivateOrg },
+  { method: "DELETE", path: "/orgs/:id", handler: deleteOrg },
 
   // Users (org-scoped)
   { method: "POST", path: "/users/invite", handler: createUserInvitation },

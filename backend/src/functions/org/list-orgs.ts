@@ -152,6 +152,10 @@ export const listOrgs = async (
           createDate: org.createDate,
           memberCount,
           systemCount,
+          status_: (org.status_ as string) || "Active",
+          suspendedReason: (org.suspendedReason as string) || null,
+          suspendedNotes: (org.suspendedNotes as string) || null,
+          suspendedAt: (org.suspendedAt as string) || null,
         };
       }),
     );

@@ -8,6 +8,7 @@ import {
   USER_STATUSES,
   type UserPermissions,
 } from "../../types/user.js";
+import { sendStatusChangeEmail } from "../../services/email-service.js";
 import {
   canSeeOrg,
   hasPermission,
@@ -157,6 +158,11 @@ export const updateUserPermissions = async (
       : undefined;
     const requestedStatus =
       typeof body.status_ === "string" ? body.status_ : undefined;
+    // Optional moderator metadata accompanying a status change.
+    const reason =
+      typeof body.reason === "string" ? body.reason.trim() : undefined;
+    const notes =
+      typeof body.notes === "string" ? body.notes.trim() : undefined;
 
     if (
       requestedStatus &&
@@ -224,6 +230,27 @@ export const updateUserPermissions = async (
       updates.push("#status = :status");
       values[":status"] = requestedStatus;
       names["#status"] = "status_";
+      // When suspending, persist the moderator metadata so the
+      // platform owner can audit later.
+      if (requestedStatus === "Suspended") {
+        if (reason) {
+          updates.push("suspendedReason = :reason");
+          values[":reason"] = reason;
+        }
+        if (notes !== undefined) {
+          updates.push("suspendedNotes = :notes");
+          values[":notes"] = notes;
+        }
+        updates.push("suspendedAt = :ts");
+        values[":ts"] = new Date().toISOString();
+      } else {
+        // Returning to Active clears the metadata.
+        updates.push("#suspendedReason = :clearStr");
+        names["#suspendedReason"] = "suspendedReason";
+        updates.push("#suspendedNotes = :clearStr");
+        names["#suspendedNotes"] = "suspendedNotes";
+        values[":clearStr"] = "";
+      }
     }
 
     if (Object.keys(filteredPermissions).length > 0) {
@@ -255,6 +282,57 @@ export const updateUserPermissions = async (
           : {}),
       }),
     );
+
+    // Status-change notification email (best-effort).
+    if (
+      requestedStatus &&
+      requestedStatus !== target.status_ &&
+      target.email
+    ) {
+      try {
+        let orgName: string | undefined;
+        if (target.orgId) {
+          try {
+            const orgResp: any = await docClient.send(
+              new (await import("@aws-sdk/lib-dynamodb")).GetCommand({
+                TableName: tableName,
+                Key: { PK: "ORG", SK: `ORG#${target.orgId}` },
+              }),
+            );
+            orgName = (orgResp.Item as { name?: string } | undefined)?.name;
+          } catch {}
+        }
+        if (requestedStatus === "Suspended") {
+          await sendStatusChangeEmail({
+            to: target.email,
+            recipientName: target.full_name || "there",
+            actorName: (actor as any).full_name,
+            orgName,
+            subjectKind: "account",
+            reason: reason || "Status change",
+            notes,
+            action: "suspended",
+          });
+        } else if (
+          requestedStatus === "Active" &&
+          target.status_ === "Suspended"
+        ) {
+          await sendStatusChangeEmail({
+            to: target.email,
+            recipientName: target.full_name || "there",
+            actorName: (actor as any).full_name,
+            orgName,
+            subjectKind: "account",
+            reason: "Reactivated",
+            notes,
+            action: "reactivated",
+            loginLink: `${process.env.FRONTEND_URL || ""}/login`,
+          });
+        }
+      } catch (mailErr) {
+        console.warn("update-permissions email send failed:", mailErr);
+      }
+    }
 
     return {
       statusCode: 200,

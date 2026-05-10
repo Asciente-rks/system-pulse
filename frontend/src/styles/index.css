@@ -1642,3 +1642,18 @@ select.field-input {
   padding: 4px 10px;
   border-radius: 999px;
 }
+
+/* ---- Wider centered modal for the org detail view ---- */
+.org-detail-modal {
+  width: min(96vw, 760px);
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+/* Multi-line textareas in modals (suspend/delete notes) — match
+   the field-input styling so the form looks cohesive. */
+textarea.field-input {
+  min-height: 64px;
+  resize: vertical;
+  font-family: inherit;
+}

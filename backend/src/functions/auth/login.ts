@@ -156,6 +156,32 @@ export const login = async (
       };
     }
 
+    // Block login if the user belongs to a suspended org. The
+    // platform-internal org is exempt (superadmin can always sign
+    // in regardless of any other state).
+    if (user.orgId && String(user.role) !== "superadmin") {
+      try {
+        const orgCheck: any = await docClient.send(
+          new GetCommand({
+            TableName: tableName,
+            Key: { PK: "ORG", SK: `ORG#${user.orgId}` },
+          }),
+        );
+        if (orgCheck.Item?.status_ === "Suspended") {
+          return {
+            statusCode: 403,
+            headers,
+            body: JSON.stringify({
+              message:
+                "Your organization has been suspended. Contact your platform administrator.",
+            }),
+          };
+        }
+      } catch (orgErr) {
+        console.warn("login: org status check failed", orgErr);
+      }
+    }
+
     // Successful login: reset the failed counter so an unlucky typo
     // streak doesn't lock the user later.
     if (Number(user.failedLoginAttempts || 0) > 0) {

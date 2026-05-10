@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   changeUserRole,
   createSystem,
+  deleteOrg,
   deleteSystem,
   deleteUser,
   type DeploymentModeInput,
@@ -11,12 +12,18 @@ import {
   listOrgs,
   listSystems,
   listUsers,
+  ORG_DELETE_REASONS,
+  ORG_SUSPEND_REASONS,
   PERMISSION_KEYS,
   PERMISSION_LABELS,
+  reactivateOrg,
+  suspendOrg,
   triggerHealth,
   unlockUser,
   updateSystem,
   updateUserPermissions,
+  USER_DELETE_REASONS,
+  USER_SUSPEND_REASONS,
   type AuthRole,
   type OrgSummary,
   type SessionUser,
@@ -48,6 +55,16 @@ const PERMISSIONS_NEEDING_OWNER: Array<keyof UserPermissions> = [
 
 type UserModalTab = "access" | "permissions";
 
+// Stable priority for sort-by-role on the Users tab. Higher tier
+// (lower number) shows first.
+const ROLE_RANK: Record<string, number> = {
+  superadmin: 0,
+  owner: 1,
+  admin: 2,
+  user: 3,
+  tester: 4,
+};
+
 export default function AdminDashboard() {
   const { user, isDemo, isOwner, can } = useAuth();
   const isSuperAdmin = user?.role === "superadmin";
@@ -70,11 +87,56 @@ export default function AdminDashboard() {
 
   // Platform tab (superadmin)
   const [platformOrgs, setPlatformOrgs] = useState<OrgSummary[]>([]);
-  const [expandedOrgId, setExpandedOrgId] = useState<string | null>(null);
+  const [orgDetailTarget, setOrgDetailTarget] = useState<OrgSummary | null>(
+    null,
+  );
   const [orgSystemsCache, setOrgSystemsCache] = useState<
     Record<string, SystemSummary[]>
   >({});
   const [orgSystemsBusy, setOrgSystemsBusy] = useState<string | null>(null);
+
+  // Org suspend / delete modals
+  const [orgSuspendTarget, setOrgSuspendTarget] = useState<OrgSummary | null>(
+    null,
+  );
+  const [orgSuspendReason, setOrgSuspendReason] = useState<string>(
+    ORG_SUSPEND_REASONS[0],
+  );
+  const [orgSuspendNotes, setOrgSuspendNotes] = useState("");
+
+  const [orgDeleteTarget, setOrgDeleteTarget] = useState<OrgSummary | null>(
+    null,
+  );
+  const [orgDeleteReason, setOrgDeleteReason] = useState<string>(
+    ORG_DELETE_REASONS[0],
+  );
+  const [orgDeleteNotes, setOrgDeleteNotes] = useState("");
+  const [orgDeletePassword, setOrgDeletePassword] = useState("");
+  const [orgDeleteConfirm, setOrgDeleteConfirm] = useState("");
+
+  // User suspend modal (replaces the one-click toggle on suspension)
+  const [userSuspendTarget, setUserSuspendTarget] =
+    useState<SessionUser | null>(null);
+  const [userSuspendReason, setUserSuspendReason] = useState<string>(
+    USER_SUSPEND_REASONS[0],
+  );
+  const [userSuspendNotes, setUserSuspendNotes] = useState("");
+
+  // Create-user modal (replaces the inline invite form)
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+
+  // User-delete extras (the reason + notes ride along with the
+  // existing password-confirm gate inside the user-edit modal)
+  const [userDeleteReason, setUserDeleteReason] = useState<string>(
+    USER_DELETE_REASONS[0],
+  );
+  const [userDeleteNotes, setUserDeleteNotes] = useState("");
+
+  // Sort + filter for the Users tab
+  const [userSort, setUserSort] = useState<
+    "role" | "name" | "status" | "created"
+  >("role");
+  const [userOrgFilter, setUserOrgFilter] = useState<string>("all");
 
   // Create system form
   const [systemName, setSystemName] = useState("");
@@ -136,15 +198,57 @@ export default function AdminDashboard() {
     return ["user"] as const;
   }, [user?.role, isOwner]);
 
+  const sortedFilteredUsers = useMemo(() => {
+    let list = users;
+    if (userOrgFilter !== "all") {
+      list = list.filter((u) => u.orgId === userOrgFilter);
+    }
+    const out = [...list];
+    if (userSort === "role") {
+      out.sort(
+        (a, b) =>
+          (ROLE_RANK[a.role] ?? 99) - (ROLE_RANK[b.role] ?? 99) ||
+          a.full_name.localeCompare(b.full_name),
+      );
+    } else if (userSort === "name") {
+      out.sort((a, b) => a.full_name.localeCompare(b.full_name));
+    } else if (userSort === "status") {
+      out.sort(
+        (a, b) =>
+          a.status_.localeCompare(b.status_) ||
+          a.full_name.localeCompare(b.full_name),
+      );
+    }
+    // "created" defaults to natural order from the API which is
+    // already newest-first.
+    return out;
+  }, [users, userSort, userOrgFilter]);
+
   const totalUserPages = Math.max(
     1,
-    Math.ceil(users.length / USERS_PER_PAGE),
+    Math.ceil(sortedFilteredUsers.length / USERS_PER_PAGE),
   );
 
   const pagedUsers = useMemo(() => {
     const start = (userPage - 1) * USERS_PER_PAGE;
-    return users.slice(start, start + USERS_PER_PAGE);
-  }, [users, userPage]);
+    return sortedFilteredUsers.slice(start, start + USERS_PER_PAGE);
+  }, [sortedFilteredUsers, userPage]);
+
+  // Build a list of orgs visible to the actor for the org-filter
+  // dropdown. Superadmin sees every org via Platform tab data;
+  // everyone else can only see their own.
+  const userOrgFilterOptions = useMemo(() => {
+    if (isSuperAdmin && platformOrgs.length > 0) {
+      return [
+        { id: "all", name: "All organizations" },
+        ...platformOrgs.map((o) => ({ id: o.id, name: o.name })),
+      ];
+    }
+    if (user?.orgId && user.orgName) {
+      return [{ id: "all", name: `All in ${user.orgName}` }];
+    }
+    return [{ id: "all", name: "All visible" }];
+  }, [isSuperAdmin, platformOrgs, user?.orgId, user?.orgName]);
 
   const hasPendingChecks = useMemo(
     () =>
@@ -474,7 +578,10 @@ export default function AdminDashboard() {
     setErrorMessage(null);
 
     try {
-      const response = await deleteUser(editingUser.id, userDeletePassword);
+      const response = await deleteUser(editingUser.id, userDeletePassword, {
+        reason: userDeleteReason,
+        notes: userDeleteNotes,
+      });
       if (response._httpStatus >= 400) {
         setErrorMessage(
           String(response.message || "Failed to delete user"),
@@ -484,6 +591,8 @@ export default function AdminDashboard() {
       setStatusMessage("User deleted");
       setUserModalOpen(false);
       setEditingUser(null);
+      setUserDeleteReason(USER_DELETE_REASONS[0]);
+      setUserDeleteNotes("");
       await loadUsersAndSystems();
     } finally {
       setBusy(null);
@@ -559,26 +668,141 @@ export default function AdminDashboard() {
     }
   }
 
-  async function handleSuspendToggle(target: SessionUser) {
-    const next = target.status_ === "Suspended" ? "Active" : "Suspended";
+  // Direct one-click reactivate (no reason required for the
+  // friendly direction). Suspending now goes through a modal so we
+  // can collect a reason + notes.
+  async function handleReactivateUser(target: SessionUser) {
     setBusy(`suspend-${target.id}`);
     setErrorMessage(null);
     try {
       const response = await updateUserPermissions({
         userId: target.id,
-        status_: next,
+        status_: "Active",
       });
       if (response._httpStatus >= 400) {
         setErrorMessage(
-          String(response.message || "Could not change status"),
+          String(response.message || "Could not reactivate"),
         );
         return;
       }
+      setStatusMessage(`${target.full_name} reactivated`);
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openUserSuspendModal(target: SessionUser) {
+    setUserSuspendTarget(target);
+    setUserSuspendReason(USER_SUSPEND_REASONS[0]);
+    setUserSuspendNotes("");
+  }
+
+  async function handleSubmitUserSuspend() {
+    if (!userSuspendTarget) return;
+    setBusy(`suspend-${userSuspendTarget.id}`);
+    setErrorMessage(null);
+    try {
+      const response = await updateUserPermissions({
+        userId: userSuspendTarget.id,
+        status_: "Suspended",
+        reason: userSuspendReason,
+        notes: userSuspendNotes,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not suspend"),
+        );
+        return;
+      }
+      setStatusMessage(`${userSuspendTarget.full_name} suspended`);
+      setUserSuspendTarget(null);
+      await loadUsersAndSystems();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  // ---- Org suspend / reactivate / delete handlers ----
+
+  async function handleSubmitOrgSuspend() {
+    if (!orgSuspendTarget) return;
+    setBusy(`org-suspend-${orgSuspendTarget.id}`);
+    setErrorMessage(null);
+    try {
+      const response = await suspendOrg({
+        orgId: orgSuspendTarget.id,
+        reason: orgSuspendReason,
+        notes: orgSuspendNotes,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not suspend organization"),
+        );
+        return;
+      }
+      setStatusMessage(`Organization "${orgSuspendTarget.name}" suspended`);
+      setOrgSuspendTarget(null);
+      setOrgDetailTarget(null);
+      await loadPlatform();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleReactivateOrg(org: OrgSummary) {
+    setBusy(`org-reactivate-${org.id}`);
+    setErrorMessage(null);
+    try {
+      const response = await reactivateOrg({ orgId: org.id });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not reactivate organization"),
+        );
+        return;
+      }
+      setStatusMessage(`Organization "${org.name}" reactivated`);
+      await loadPlatform();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleSubmitOrgDelete() {
+    if (!orgDeleteTarget) return;
+    if (orgDeleteConfirm !== "DELETE") {
+      setErrorMessage("Type DELETE to confirm.");
+      return;
+    }
+    if (!orgDeletePassword) {
+      setErrorMessage("Your password is required.");
+      return;
+    }
+    setBusy(`org-delete-${orgDeleteTarget.id}`);
+    setErrorMessage(null);
+    try {
+      const response = await deleteOrg({
+        orgId: orgDeleteTarget.id,
+        actorPassword: orgDeletePassword,
+        reason: orgDeleteReason,
+        notes: orgDeleteNotes,
+      });
+      if (response._httpStatus >= 400) {
+        setErrorMessage(
+          String(response.message || "Could not delete organization"),
+        );
+        return;
+      }
+      const data = response.data;
       setStatusMessage(
-        next === "Suspended"
-          ? `${target.full_name} suspended`
-          : `${target.full_name} reactivated`,
+        `Organization deleted (${data?.usersDeleted ?? 0} users, ${data?.systemsDeleted ?? 0} systems removed)`,
       );
+      setOrgDeleteTarget(null);
+      setOrgDetailTarget(null);
+      setOrgDeletePassword("");
+      setOrgDeleteConfirm("");
+      setOrgDeleteNotes("");
+      await loadPlatform();
       await loadUsersAndSystems();
     } finally {
       setBusy(null);
@@ -965,61 +1189,61 @@ export default function AdminDashboard() {
 
       {activeTab === "users" && (
         <section className="panel">
-          <h3 className="panel-subtitle">User Management</h3>
+          <div className="modal-head">
+            <h3 className="panel-subtitle">User Management</h3>
+            {canInvite && (
+              <button
+                className="btn btn-primary"
+                onClick={() => setCreateUserOpen(true)}
+              >
+                + Create user
+              </button>
+            )}
+          </div>
 
-          {canInvite ? (
-            <form onSubmit={handleInvite} className="form-grid form-grid-4col">
-              <div className="form-field">
-                <label className="field-label">Email</label>
-                <input
-                  className="field-input"
-                  type="email"
-                  value={inviteEmail}
-                  onChange={(event) => setInviteEmail(event.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="form-field">
-                <label className="field-label">Full Name</label>
-                <input
-                  className="field-input"
-                  value={inviteName}
-                  onChange={(event) => setInviteName(event.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="form-field">
-                <label className="field-label">Role</label>
-                <AestheticSelect
-                  ariaLabel="Role"
-                  value={inviteRole}
-                  onChange={(nextValue) =>
-                    setInviteRole(nextValue as AuthRole)
-                  }
-                  options={inviteRoleOptions.map((role) => ({
-                    value: role,
-                    label: role,
-                  }))}
-                />
-              </div>
-
-              <div className="form-field form-action-field">
-                <label className="field-label">&nbsp;</label>
-                <button
-                  className="btn btn-primary"
-                  disabled={busy === "invite"}
-                >
-                  {busy === "invite" ? "Sending..." : "Send Invite"}
-                </button>
-              </div>
-            </form>
-          ) : (
+          {!canInvite && (
             <p className="panel-copy compact-copy">
               Your account doesn't have the canCreateUser permission.
             </p>
           )}
+
+          <div
+            className="form-grid form-grid-2col"
+            style={{ marginBottom: 12 }}
+          >
+            <div className="form-field">
+              <label className="field-label">Sort by</label>
+              <AestheticSelect
+                ariaLabel="Sort users"
+                value={userSort}
+                onChange={(nextValue) =>
+                  setUserSort(nextValue as typeof userSort)
+                }
+                options={[
+                  { value: "role", label: "Role (Owner → Admin → User)" },
+                  { value: "name", label: "Name (A–Z)" },
+                  { value: "status", label: "Status" },
+                  { value: "created", label: "Newest first" },
+                ]}
+              />
+            </div>
+            {isSuperAdmin && (
+              <div className="form-field">
+                <label className="field-label">Organization</label>
+                <AestheticSelect
+                  ariaLabel="Filter by organization"
+                  value={userOrgFilter}
+                  onChange={(nextValue) =>
+                    setUserOrgFilter(String(nextValue))
+                  }
+                  options={userOrgFilterOptions.map((opt) => ({
+                    value: opt.id,
+                    label: opt.name,
+                  }))}
+                />
+              </div>
+            )}
+          </div>
 
           <div className="table-wrap">
             <table className="data-table">
@@ -1028,6 +1252,7 @@ export default function AdminDashboard() {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Role</th>
+                  {isSuperAdmin && <th>Organization</th>}
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -1044,6 +1269,14 @@ export default function AdminDashboard() {
                           {entry.role}
                         </span>
                       </td>
+                      {isSuperAdmin && (
+                        <td>
+                          {(platformOrgs.find((o) => o.id === entry.orgId)
+                            ?.name) ||
+                            entry.orgId ||
+                            "—"}
+                        </td>
+                      )}
                       <td>
                         {locked ? (
                           <span className="role-pill role-locked" title={`Locked at ${entry.lockedAt}`}>
@@ -1076,7 +1309,13 @@ export default function AdminDashboard() {
                                     ? "btn-success"
                                     : "btn-warning"
                                 }`}
-                                onClick={() => handleSuspendToggle(entry)}
+                                onClick={() => {
+                                  if (entry.status_ === "Suspended") {
+                                    void handleReactivateUser(entry);
+                                  } else {
+                                    openUserSuspendModal(entry);
+                                  }
+                                }}
                                 disabled={busy === `suspend-${entry.id}`}
                                 title={
                                   entry.status_ === "Suspended"
@@ -1165,8 +1404,8 @@ export default function AdminDashboard() {
           ) : (
             <div className="grid-cards">
               {platformOrgs.map((org) => {
-                const expanded = expandedOrgId === org.id;
                 const orgUsers = users.filter((u) => u.orgId === org.id);
+                const isSuspended = org.status_ === "Suspended";
                 return (
                   <article key={org.id} className="system-card platform-card">
                     <div>
@@ -1176,6 +1415,11 @@ export default function AdminDashboard() {
                           {org.isDemo && (
                             <span className="role-pill role-locked" style={{ marginLeft: 8 }}>
                               DEMO
+                            </span>
+                          )}
+                          {isSuspended && (
+                            <span className="role-pill role-locked" style={{ marginLeft: 8 }}>
+                              SUSPENDED
                             </span>
                           )}
                         </p>
@@ -1212,149 +1456,17 @@ export default function AdminDashboard() {
                       <button
                         className="btn btn-info"
                         onClick={() => {
-                          if (expanded) {
-                            setExpandedOrgId(null);
-                          } else {
-                            setExpandedOrgId(org.id);
-                            if (!orgSystemsCache[org.id]) {
-                              void loadOrgSystems(org.id);
-                            }
+                          setOrgDetailTarget(org);
+                          if (!orgSystemsCache[org.id]) {
+                            void loadOrgSystems(org.id);
                           }
                         }}
                       >
-                        {expanded
-                          ? "Hide details"
-                          : `View members + systems`}
+                        Open organization
                       </button>
                     </div>
+                    {(() => { void orgUsers; return null; })()}
 
-                    {expanded && (
-                      <div
-                        className="table-wrap"
-                        style={{ marginTop: 12 }}
-                      >
-                        <table className="data-table">
-                          <thead>
-                            <tr>
-                              <th>Name</th>
-                              <th>Email</th>
-                              <th>Role</th>
-                              <th>Status</th>
-                              <th>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {orgUsers.map((entry) => {
-                              const locked = Boolean(entry.lockedAt);
-                              return (
-                                <tr key={entry.id}>
-                                  <td>{entry.full_name}</td>
-                                  <td>{entry.email}</td>
-                                  <td>
-                                    <span
-                                      className={`role-pill role-${entry.role}`}
-                                    >
-                                      {entry.role}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    {locked ? (
-                                      <span className="role-pill role-locked">
-                                        🔒 Locked
-                                      </span>
-                                    ) : (
-                                      entry.status_
-                                    )}
-                                  </td>
-                                  <td>
-                                    <div
-                                      className="button-row"
-                                      style={{ gap: 6 }}
-                                    >
-                                      <button
-                                        className="btn btn-surface"
-                                        onClick={() => openUserSettings(entry)}
-                                      >
-                                        Settings
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                            {orgUsers.length === 0 && (
-                              <tr>
-                                <td colSpan={5} style={{ opacity: 0.7 }}>
-                                  No visible members in this org.
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-
-                        <p
-                          className="field-label"
-                          style={{ marginTop: 12 }}
-                        >
-                          Systems in this org
-                        </p>
-                        {orgSystemsBusy === org.id && (
-                          <p className="panel-copy compact-copy">
-                            Loading...
-                          </p>
-                        )}
-                        {orgSystemsBusy !== org.id &&
-                          orgSystemsCache[org.id] && (
-                            <div className="grid-cards">
-                              {orgSystemsCache[org.id]!.map((s) => {
-                                const status = getSystemHealthStatus(s);
-                                return (
-                                  <article
-                                    key={s.id}
-                                    className="system-card"
-                                    style={{ padding: 14 }}
-                                  >
-                                    <div>
-                                      <span
-                                        className={statusPillClassName(
-                                          status,
-                                        )}
-                                      >
-                                        {status}
-                                      </span>
-                                      <p className="system-title">
-                                        {s.name}
-                                      </p>
-                                      <p className="panel-copy system-url">
-                                        {s.url}
-                                      </p>
-                                      {s.lastChecked && (
-                                        <p
-                                          className="panel-copy"
-                                          style={{
-                                            fontSize: "0.85em",
-                                            opacity: 0.75,
-                                          }}
-                                        >
-                                          Last checked:{" "}
-                                          {new Date(
-                                            s.lastChecked,
-                                          ).toLocaleString()}
-                                        </p>
-                                      )}
-                                    </div>
-                                  </article>
-                                );
-                              })}
-                              {orgSystemsCache[org.id]!.length === 0 && (
-                                <p className="panel-copy compact-copy">
-                                  No systems registered in this org yet.
-                                </p>
-                              )}
-                            </div>
-                          )}
-                      </div>
-                    )}
                   </article>
                 );
               })}
@@ -1544,6 +1656,35 @@ export default function AdminDashboard() {
               )}
 
               <div className="modal-form-grid modal-danger-grid">
+                <div className="form-field">
+                  <label className="field-label">Reason (sent in email)</label>
+                  <AestheticSelect
+                    ariaLabel="Delete reason"
+                    value={userDeleteReason}
+                    onChange={(nextValue) =>
+                      setUserDeleteReason(String(nextValue))
+                    }
+                    options={USER_DELETE_REASONS.map((r) => ({
+                      value: r,
+                      label: r,
+                    }))}
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label">
+                    Notes (optional, sent in email)
+                  </label>
+                  <input
+                    className="field-input"
+                    value={userDeleteNotes}
+                    onChange={(event) =>
+                      setUserDeleteNotes(event.target.value)
+                    }
+                    disabled={!canDeleteUser}
+                    placeholder="Anything else the user should know"
+                    maxLength={500}
+                  />
+                </div>
                 <div className="form-field">
                   <label className="field-label">Type DELETE</label>
                   <input
@@ -1770,6 +1911,541 @@ export default function AdminDashboard() {
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Org detail modal (Platform tab) ---- */}
+      {orgDetailTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => setOrgDetailTarget(null)}
+        >
+          <div
+            className="modal-card org-detail-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <div>
+                <h3 className="panel-subtitle">{orgDetailTarget.name}</h3>
+                <p className="panel-copy compact-copy">
+                  {orgDetailTarget.ownerName ? (
+                    <>
+                      Owner: <strong>{orgDetailTarget.ownerName}</strong>
+                      {orgDetailTarget.ownerEmail && (
+                        <> · {orgDetailTarget.ownerEmail}</>
+                      )}
+                    </>
+                  ) : (
+                    <>Owner: (unknown)</>
+                  )}
+                  {orgDetailTarget.status_ === "Suspended" && (
+                    <>
+                      {" "}
+                      ·{" "}
+                      <span className="role-pill role-locked">
+                        SUSPENDED
+                      </span>
+                    </>
+                  )}
+                </p>
+                {orgDetailTarget.suspendedReason && (
+                  <p className="panel-copy compact-copy">
+                    Suspended reason: {orgDetailTarget.suspendedReason}
+                    {orgDetailTarget.suspendedNotes && (
+                      <> · {orgDetailTarget.suspendedNotes}</>
+                    )}
+                  </p>
+                )}
+              </div>
+              <button
+                className="btn btn-muted"
+                onClick={() => setOrgDetailTarget(null)}
+              >
+                Close
+              </button>
+            </header>
+
+            <div className="modal-body">
+              <p className="field-label">Members</p>
+              <div className="table-wrap">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users
+                      .filter((u) => u.orgId === orgDetailTarget.id)
+                      .map((entry) => {
+                        const locked = Boolean(entry.lockedAt);
+                        return (
+                          <tr key={entry.id}>
+                            <td>{entry.full_name}</td>
+                            <td>{entry.email}</td>
+                            <td>
+                              <span className={`role-pill role-${entry.role}`}>
+                                {entry.role}
+                              </span>
+                            </td>
+                            <td>
+                              {locked ? (
+                                <span className="role-pill role-locked">
+                                  🔒 Locked
+                                </span>
+                              ) : (
+                                entry.status_
+                              )}
+                            </td>
+                            <td>
+                              <button
+                                className="btn btn-surface"
+                                onClick={() => openUserSettings(entry)}
+                              >
+                                Settings
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    {users.filter((u) => u.orgId === orgDetailTarget.id)
+                      .length === 0 && (
+                      <tr>
+                        <td colSpan={5} style={{ opacity: 0.7 }}>
+                          No visible members in this org.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="field-label" style={{ marginTop: 12 }}>
+                Systems
+              </p>
+              {orgSystemsBusy === orgDetailTarget.id && (
+                <p className="panel-copy compact-copy">Loading...</p>
+              )}
+              {orgSystemsBusy !== orgDetailTarget.id &&
+                orgSystemsCache[orgDetailTarget.id] && (
+                  <div className="grid-cards">
+                    {orgSystemsCache[orgDetailTarget.id]!.map((s) => {
+                      const status = getSystemHealthStatus(s);
+                      return (
+                        <article
+                          key={s.id}
+                          className="system-card"
+                          style={{ padding: 14 }}
+                        >
+                          <div>
+                            <span className={statusPillClassName(status)}>
+                              {status}
+                            </span>
+                            <p className="system-title">{s.name}</p>
+                            <p className="panel-copy system-url">{s.url}</p>
+                            {s.lastChecked && (
+                              <p
+                                className="panel-copy"
+                                style={{
+                                  fontSize: "0.85em",
+                                  opacity: 0.75,
+                                }}
+                              >
+                                Last checked:{" "}
+                                {new Date(s.lastChecked).toLocaleString()}
+                              </p>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                    {orgSystemsCache[orgDetailTarget.id]!.length === 0 && (
+                      <p className="panel-copy compact-copy">
+                        No systems registered in this org yet.
+                      </p>
+                    )}
+                  </div>
+                )}
+            </div>
+
+            {!orgDetailTarget.isInternal && (
+              <footer className="modal-actions">
+                {orgDetailTarget.status_ === "Suspended" ? (
+                  <button
+                    className="btn btn-success"
+                    onClick={() => handleReactivateOrg(orgDetailTarget)}
+                    disabled={
+                      busy === `org-reactivate-${orgDetailTarget.id}`
+                    }
+                  >
+                    {busy === `org-reactivate-${orgDetailTarget.id}`
+                      ? "Reactivating..."
+                      : "Reactivate organization"}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-warning"
+                    onClick={() => {
+                      setOrgSuspendTarget(orgDetailTarget);
+                      setOrgSuspendReason(ORG_SUSPEND_REASONS[0]);
+                      setOrgSuspendNotes("");
+                    }}
+                  >
+                    Suspend organization
+                  </button>
+                )}
+                <button
+                  className="btn btn-danger"
+                  onClick={() => {
+                    setOrgDeleteTarget(orgDetailTarget);
+                    setOrgDeleteReason(ORG_DELETE_REASONS[0]);
+                    setOrgDeleteNotes("");
+                    setOrgDeletePassword("");
+                    setOrgDeleteConfirm("");
+                  }}
+                >
+                  Delete organization
+                </button>
+              </footer>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Org SUSPEND modal ---- */}
+      {orgSuspendTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => setOrgSuspendTarget(null)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <h3 className="panel-subtitle">Suspend organization</h3>
+              <button
+                className="btn btn-muted"
+                onClick={() => setOrgSuspendTarget(null)}
+              >
+                Close
+              </button>
+            </header>
+            <div className="modal-body">
+              <p className="panel-copy compact-copy">
+                Suspending <strong>{orgSuspendTarget.name}</strong> will
+                block all members from signing in. The owner will be
+                notified by email with the reason and your notes.
+                Reversible.
+              </p>
+              <div className="form-field">
+                <label className="field-label">Reason</label>
+                <AestheticSelect
+                  ariaLabel="Suspension reason"
+                  value={orgSuspendReason}
+                  onChange={(nextValue) =>
+                    setOrgSuspendReason(String(nextValue))
+                  }
+                  options={ORG_SUSPEND_REASONS.map((r) => ({
+                    value: r,
+                    label: r,
+                  }))}
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Notes (optional)</label>
+                <textarea
+                  className="field-input"
+                  rows={3}
+                  value={orgSuspendNotes}
+                  onChange={(event) =>
+                    setOrgSuspendNotes(event.target.value)
+                  }
+                  maxLength={2000}
+                  placeholder="Add context the owner should see in their email"
+                />
+              </div>
+            </div>
+            <footer className="modal-actions">
+              <button
+                className="btn btn-warning"
+                onClick={handleSubmitOrgSuspend}
+                disabled={
+                  busy === `org-suspend-${orgSuspendTarget.id}` ||
+                  !orgSuspendReason
+                }
+              >
+                {busy === `org-suspend-${orgSuspendTarget.id}`
+                  ? "Suspending..."
+                  : "Suspend organization"}
+              </button>
+              <button
+                className="btn btn-muted"
+                onClick={() => setOrgSuspendTarget(null)}
+              >
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Org DELETE modal ---- */}
+      {orgDeleteTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => setOrgDeleteTarget(null)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <h3 className="panel-subtitle">Delete organization</h3>
+              <button
+                className="btn btn-muted"
+                onClick={() => setOrgDeleteTarget(null)}
+              >
+                Close
+              </button>
+            </header>
+            <div className="modal-body">
+              <p className="panel-copy compact-copy">
+                Deleting <strong>{orgDeleteTarget.name}</strong> will
+                permanently remove the org, all of its users, all of its
+                systems, and every health log. The owner will be notified
+                by email before the wipe. <strong>Not reversible.</strong>
+              </p>
+              <div className="form-field">
+                <label className="field-label">Reason</label>
+                <AestheticSelect
+                  ariaLabel="Deletion reason"
+                  value={orgDeleteReason}
+                  onChange={(nextValue) =>
+                    setOrgDeleteReason(String(nextValue))
+                  }
+                  options={ORG_DELETE_REASONS.map((r) => ({
+                    value: r,
+                    label: r,
+                  }))}
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Notes (optional)</label>
+                <textarea
+                  className="field-input"
+                  rows={3}
+                  value={orgDeleteNotes}
+                  onChange={(event) =>
+                    setOrgDeleteNotes(event.target.value)
+                  }
+                  maxLength={2000}
+                  placeholder="What should the owner know about this deletion?"
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Type DELETE</label>
+                <input
+                  className="field-input"
+                  value={orgDeleteConfirm}
+                  onChange={(event) =>
+                    setOrgDeleteConfirm(event.target.value)
+                  }
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Your password</label>
+                <input
+                  className="field-input"
+                  type="password"
+                  value={orgDeletePassword}
+                  onChange={(event) =>
+                    setOrgDeletePassword(event.target.value)
+                  }
+                  autoComplete="current-password"
+                />
+              </div>
+            </div>
+            <footer className="modal-actions">
+              <button
+                className="btn btn-danger"
+                onClick={handleSubmitOrgDelete}
+                disabled={
+                  busy === `org-delete-${orgDeleteTarget.id}` ||
+                  orgDeleteConfirm !== "DELETE" ||
+                  !orgDeletePassword
+                }
+              >
+                {busy === `org-delete-${orgDeleteTarget.id}`
+                  ? "Deleting..."
+                  : "Delete forever"}
+              </button>
+              <button
+                className="btn btn-muted"
+                onClick={() => setOrgDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ---- User SUSPEND modal (replaces one-click toggle) ---- */}
+      {userSuspendTarget && (
+        <div
+          className="modal-overlay"
+          onClick={() => setUserSuspendTarget(null)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <h3 className="panel-subtitle">
+                Suspend {userSuspendTarget.full_name}
+              </h3>
+              <button
+                className="btn btn-muted"
+                onClick={() => setUserSuspendTarget(null)}
+              >
+                Close
+              </button>
+            </header>
+            <div className="modal-body">
+              <p className="panel-copy compact-copy">
+                The user will be blocked from signing in until reactivated.
+                They get an email with the reason and your notes.
+              </p>
+              <div className="form-field">
+                <label className="field-label">Reason</label>
+                <AestheticSelect
+                  ariaLabel="Suspension reason"
+                  value={userSuspendReason}
+                  onChange={(nextValue) =>
+                    setUserSuspendReason(String(nextValue))
+                  }
+                  options={USER_SUSPEND_REASONS.map((r) => ({
+                    value: r,
+                    label: r,
+                  }))}
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Notes (optional)</label>
+                <textarea
+                  className="field-input"
+                  rows={3}
+                  value={userSuspendNotes}
+                  onChange={(event) =>
+                    setUserSuspendNotes(event.target.value)
+                  }
+                  maxLength={2000}
+                  placeholder="Add context the user should see in their email"
+                />
+              </div>
+            </div>
+            <footer className="modal-actions">
+              <button
+                className="btn btn-warning"
+                onClick={handleSubmitUserSuspend}
+                disabled={
+                  busy === `suspend-${userSuspendTarget.id}` ||
+                  !userSuspendReason
+                }
+              >
+                {busy === `suspend-${userSuspendTarget.id}`
+                  ? "Suspending..."
+                  : "Suspend account"}
+              </button>
+              <button
+                className="btn btn-muted"
+                onClick={() => setUserSuspendTarget(null)}
+              >
+                Cancel
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
+
+      {/* ---- Create user modal ---- */}
+      {createUserOpen && (
+        <div
+          className="modal-overlay"
+          onClick={() => setCreateUserOpen(false)}
+        >
+          <div
+            className="modal-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="modal-head">
+              <h3 className="panel-subtitle">Invite a new user</h3>
+              <button
+                className="btn btn-muted"
+                onClick={() => setCreateUserOpen(false)}
+              >
+                Close
+              </button>
+            </header>
+            <form
+              onSubmit={async (event) => {
+                event.preventDefault();
+                await handleInvite(event);
+                if (!errorMessage) {
+                  setCreateUserOpen(false);
+                }
+              }}
+              className="modal-body form-grid form-grid-2col"
+            >
+              <div className="form-field">
+                <label className="field-label">Email</label>
+                <input
+                  className="field-input"
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Full name</label>
+                <input
+                  className="field-input"
+                  value={inviteName}
+                  onChange={(event) => setInviteName(event.target.value)}
+                  required
+                />
+              </div>
+              <div className="form-field">
+                <label className="field-label">Role</label>
+                <AestheticSelect
+                  ariaLabel="Role"
+                  value={inviteRole}
+                  onChange={(nextValue) =>
+                    setInviteRole(nextValue as AuthRole)
+                  }
+                  options={inviteRoleOptions.map((role) => ({
+                    value: role,
+                    label: role,
+                  }))}
+                />
+              </div>
+              <div className="form-field form-action-field">
+                <label className="field-label">&nbsp;</label>
+                <button
+                  className="btn btn-primary"
+                  disabled={busy === "invite"}
+                >
+                  {busy === "invite" ? "Sending..." : "Send invite"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

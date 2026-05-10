@@ -29,6 +29,29 @@ interface SendWelcomeEmailInput {
   loginLink: string;
 }
 
+interface SendStatusChangeEmailInput {
+  to: string;
+  /** Display name of the recipient (org owner or user). */
+  recipientName: string;
+  /** Display name of the actor performing the action. */
+  actorName?: string;
+  /** Org context. For user-level emails this is the user's org. */
+  orgName?: string;
+  /** "Account", "Organization", etc. */
+  subjectKind: "account" | "organization";
+  /** Pre-defined reason from a fixed dropdown. */
+  reason: string;
+  /** Free-text moderator notes. Optional. */
+  notes?: string;
+  /** Past-tense action label rendered in subject + body. */
+  action:
+    | "suspended"
+    | "reactivated"
+    | "deleted"
+    | "permanently deleted";
+  loginLink?: string;
+}
+
 let transporter: nodemailer.Transporter | null = null;
 
 const getTransporter = (): nodemailer.Transporter => {
@@ -128,6 +151,87 @@ export const sendOtpEmail = async (input: SendOtpEmailInput): Promise<void> => {
       `<p style="font-size:28px;letter-spacing:6px;font-weight:bold;font-family:monospace;">${escapeForHtml(input.otp)}</p>` +
       `<p>This code expires in <strong>${input.expiresInMinutes} minutes</strong>.</p>` +
       `<p>If you didn't request this code, you can safely ignore this email.</p>`,
+  });
+};
+
+/**
+ * Generic status-change notification used for both org-level and
+ * user-level events (suspend / reactivate / delete). Always includes
+ * the dropdown-selected `reason` and the optional free-text `notes`
+ * so the recipient knows why and what to do next.
+ */
+export const sendStatusChangeEmail = async (
+  input: SendStatusChangeEmailInput,
+): Promise<void> => {
+  const user = process.env.EMAIL_USER;
+  if (!user) {
+    throw new Error("EMAIL_USER must be configured");
+  }
+
+  const mailer = getTransporter();
+
+  const subjectSubject =
+    input.subjectKind === "organization"
+      ? `Organization "${input.orgName || "your organization"}"`
+      : `Your System Pulse account`;
+  const subject = `${subjectSubject} has been ${input.action}`;
+
+  const lines = [
+    `Hello ${input.recipientName || "there"},`,
+    "",
+    `${subjectSubject} has been ${input.action} on System Pulse.`,
+    `Reason: ${input.reason}`,
+  ];
+  if (input.notes && input.notes.trim().length > 0) {
+    lines.push(`Notes: ${input.notes}`);
+  }
+  if (input.actorName) {
+    lines.push(`Performed by: ${input.actorName}`);
+  }
+  if (input.action === "reactivated" && input.loginLink) {
+    lines.push("", `You can sign back in here: ${input.loginLink}`);
+  }
+  if (input.action === "suspended") {
+    lines.push(
+      "",
+      "Suspended access is reversible. Reach out to your administrator " +
+        "if you believe this is a mistake.",
+    );
+  }
+  if (input.action === "deleted" || input.action === "permanently deleted") {
+    lines.push(
+      "",
+      "This action is permanent. If you have any questions, contact your " +
+        "administrator before any data is purged.",
+    );
+  }
+
+  const html =
+    `<p>Hello ${escapeForHtml(input.recipientName || "there")},</p>` +
+    `<p>${escapeForHtml(subjectSubject)} has been <strong>${escapeForHtml(input.action)}</strong> on System Pulse.</p>` +
+    `<p><strong>Reason:</strong> ${escapeForHtml(input.reason)}</p>` +
+    (input.notes && input.notes.trim().length > 0
+      ? `<p><strong>Notes:</strong> ${escapeForHtml(input.notes)}</p>`
+      : "") +
+    (input.actorName
+      ? `<p><strong>Performed by:</strong> ${escapeForHtml(input.actorName)}</p>`
+      : "") +
+    (input.action === "reactivated" && input.loginLink
+      ? `<p>You can sign back in here:<br/><a href="${escapeForHtml(input.loginLink)}">${escapeForHtml(input.loginLink)}</a></p>`
+      : "") +
+    (input.action === "suspended"
+      ? `<p>Suspended access is reversible. Reach out to your administrator if you believe this is a mistake.</p>`
+      : "") +
+    (input.action === "deleted" || input.action === "permanently deleted"
+      ? `<p>This action is permanent. If you have any questions, contact your administrator before any data is purged.</p>`
+      : "");
+
+  await mailer.sendMail({
+    from: `System Pulse <${user}>`,
+    to: input.to,
+    subject,
+    text: lines.join("\n"),
+    html,
   });
 };
 

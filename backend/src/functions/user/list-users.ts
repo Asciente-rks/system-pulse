@@ -115,6 +115,14 @@ export const listUsers = async (
         permissions: resolvePermissions(item as any),
         lockedAt: typeof item.lockedAt === "string" ? item.lockedAt : null,
         failedLoginAttempts: Number(item.failedLoginAttempts || 0),
+        suspendedReason:
+          typeof item.suspendedReason === "string"
+            ? item.suspendedReason
+            : null,
+        suspendedNotes:
+          typeof item.suspendedNotes === "string"
+            ? item.suspendedNotes
+            : null,
       }));
 
     return {
