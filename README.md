@@ -285,7 +285,7 @@ The table is provisioned by the deployment workflow with `BillingMode: PAY_PER_R
 
 ```
 system-pulse/
-├── .github/workflows/deployment.yml   # Idempotent infra+code deploy (~600 lines)
+├── .github/workflows/deployment.yml   # Idempotent infra+code deploy (~500 lines)
 ├── backend/
 │   ├── package.json                   # Node 20, ESM, AWS SDK v3
 │   ├── tsconfig.json
@@ -296,7 +296,8 @@ system-pulse/
 │       ├── functions/
 │       │   ├── auth/                  # login, forgot/reset, register-{start,verify,resend}, demo-start
 │       │   ├── user/                  # invite, accept, list, get, delete,
-│       │   │                          # update-permissions, change-role, unlock
+│       │   │                          # update-permissions, change-role, unlock,
+│       │   │                          # assign-system-access
 │       │   ├── me/                    # get-me, update-name, update-email-{start,verify}, update-password
 │       │   ├── org/                   # list-orgs, update-org, suspend-org, delete-org
 │       │   └── health/                # check, list, update, delete, trigger,
@@ -378,6 +379,7 @@ system-pulse/
 | GET | `/users/:id` | admin tier | Detail for one user |
 | POST | `/users/invite` | `canCreateUser` | Invite a teammate (admin or user role) |
 | POST | `/users/invite/accept` | invite token | Set password + activate |
+| POST | `/users/:id/systems` | `canUpdateUser` | Replace a user's `allowedSystemIds` access list |
 | POST | `/users/:id/permissions` | `canUpdateUser` | System access + status + permissions in one call |
 | POST | `/users/:id/role` | owner | Promote / demote (assignable: admin, user, tester) |
 | POST | `/users/:id/unlock` | `canUpdateUser` + pwd | Clear failed-login lockout |
